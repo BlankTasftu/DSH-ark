@@ -4,15 +4,10 @@
 # 把火山方舟能力插件挂进 profile 配置树。DSH 启动时按 bundle 层栈叠加各插件
 # patch，本文件负责把 dsh-ark 这一行插进去。
 #
-# 安装（推荐在应用内「插件 → 安装 → 安装源」里填）：
-#   github:BlankTasftu/DSH-ark
-# 或命令行：
-#   dsh plugin --profile <name> add github:BlankTasftu/DSH-ark
+# 安装（本地开发）：
+#   dsh plugin --profile desktop add <本目录绝对路径>
 # 卸载：
-#   dsh plugin --profile <name> remove dsh-ark
-#
-# 安装/卸载后需**重启应用**（工具注册在启动时组合）。
-# 设置页里改密钥不需要重启（走凭据服务热更新）。
+#   dsh plugin --profile desktop remove dsh-ark
 #
 # 非敏感配置写在下面这一行的 config 块里（页面保存也写这里，是唯一存储）；
 # 密钥一律走 DSH 凭据服务（ctx.credentials），不落在本文件。
@@ -45,9 +40,11 @@
           apiKeyCredential: VOLCENGINE_SPEECH_API_KEY
           resourceTts: seed-tts-2.0
           resourceTtsClone: seed-icl-2.0
-          # 1.0 代音色（*_mars_bigtts 等）用的资源；资源会自动跟随音色名推断。
-          # 注意：本机账号未授权 1.0 代资源与声音克隆资源，实测只有 seed-tts-2.0 可用。
-          resourceTtsV1: volc.service_type.10029
+          # ⚠️ 不要凭"代"推测资源 id。曾有一个 `resourceTtsV1: volc.service_type.10029`
+          # 是照"1.0 代音色"的假设加的 —— 实测该资源**并不存在**（用已确认可用的
+          # 2.0 音色去配它照样 not granted），已删除，否则只会把"音色不配套"这一
+          # 准确错误变成误导性的"资源未授权"。
+          # 另：SeedAudio 音频生成走 model=seed-audio-1.0，与本节的资源 id 无关。
           resourceAsr: volc.seedasr.sauc.duration
           voice: zh_female_shuangkuaisisi_uranus_bigtts
           format: mp3

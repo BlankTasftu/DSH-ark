@@ -967,23 +967,22 @@ test('synthesizeSpeech 长文本按 maxCharsPerRequest 分句并逐句请求', a
 
 // ------------------------------------------------- 资源 id 随音色推断
 
-test('resourceForVoice：按音色名推断 X-Api-Resource-Id（配错的症状是 200 + 空音频）', () => {
-  // 判定规则来自实测：语音服务把音色与资源绑在一起校验，
-  // 配错返回 HTTP 200 + code 55000000「resource ID is mismatched with speaker related resource」
-  // 且音频为空 —— 看起来像音色不存在，极难定位。所以这条推断必须钉死。
+test('resourceForVoice：音色克隆走克隆资源，其余一律走 TTS 资源', () => {
+  // 为什么这条要钉死：语音服务把"音色"与"资源"绑在一起校验，配错的表现是
+  // HTTP 200 + code 55000000「resource ID is mismatched with speaker related resource」
+  // 且音频为空 —— 看起来像音色不存在，极难定位。
   const cases = [
-    // 2.0 代：名字含 uranus
+    // 2.0 音色
     ['zh_female_shuangkuaisisi_uranus_bigtts', 'seed-tts-2.0'],
     ['zh_female_vv_uranus_bigtts', 'seed-tts-2.0'],
     ['ICL_uranus_zh_female_keainvsheng_tob', 'seed-tts-2.0'],
-    // 1.0 代：_bigtts 但不含 uranus
-    ['zh_male_beijingxiaoye_emo_v2_mars_bigtts', 'volc.service_type.10029'],
-    ['zh_female_roumeinvyou_emo_v2_mars_bigtts', 'volc.service_type.10029'],
+    // 大小写不敏感
+    ['ZH_FEMALE_VV_URANUS_BIGTTS', 'seed-tts-2.0'],
     // 声音克隆
     ['S_abc123', 'seed-icl-2.0'],
     ['clone_xyz', 'seed-icl-2.0'],
-    // 大小写不敏感
-    ['ZH_FEMALE_VV_URANUS_BIGTTS', 'seed-tts-2.0'],
+    // 认不出的形态：回落 TTS 资源，让上游报准确的 mismatch，而不是瞎指一个资源
+    ['mystery-voice', 'seed-tts-2.0'],
   ]
   for (const [voice, want] of cases) {
     assert.equal(resourceForVoice(voice), want, `${voice} 应推断为 ${want}`)
@@ -992,16 +991,41 @@ test('resourceForVoice：按音色名推断 X-Api-Resource-Id（配错的症状�
   // 配置可覆盖（用户明确指定资源时以配置为准）
   assert.equal(resourceForVoice('zh_female_vv_uranus_bigtts', { resourceTts: 'custom.2.0' }), 'custom.2.0')
   assert.equal(resourceForVoice('S_x', { resourceTtsClone: 'custom.icl' }), 'custom.icl')
-  assert.equal(
-    resourceForVoice('zh_male_x_mars_bigtts', { resourceTtsV1: 'custom.v1' }),
-    'custom.v1',
-  )
-
-  // 认不出的形态回落到配置默认值，而不是瞎猜
-  assert.equal(resourceForVoice('mystery-voice'), 'seed-tts-2.0')
 })
 
-test('synthesizeSpeech：请求头里的 X-Api-Resource-Id 跟随音色，而不是写死 2.0', async () => {
+test('回归：不得再按"代"把音色路由到未经证实的资源 id（曾因此报错误导用户）', () => {
+  // 真实事故：我曾按"`_mars_bigtts` 是 1.0 代音色"把它们路由到
+  // `volc.service_type.10029`。实测该资源**不存在** —— 用**已确认可用**的 2.0 音色
+  // 去配它，照样返回 45000030「requested resource not granted」；对照组 seed-tts-2.0
+  // 正常出音频。后果不只是无效，而是**把错误信息变差**：
+  // 用户看到"资源未授权"（会去控制台白折腾开通），真相只是"音色不属于这个资源"。
+  //
+  // 更根本的教训：`_mars_bigtts`/`_uranus_bigtts` 的"代"划分出自第三方音色表，
+  // 不是官方口径。真正的官方产品线里 **TTS 与 SeedAudio 音频生成是两回事**，
+  // 不能因为都带 "1.0" 就混为一谈 —— 那正是当初出错的根源。
+  for (const voice of [
+    'zh_male_beijingxiaoye_emo_v2_mars_bigtts',
+    'zh_female_roumeinvyou_emo_v2_mars_bigtts',
+    'zh_female_wanqudashu_moon_bigtts',
+  ]) {
+    assert.equal(
+      resourceForVoice(voice),
+      'seed-tts-2.0',
+      `${voice} 应回落到 seed-tts-2.0，不得指向未证实的资源`,
+    )
+  }
+
+  // 该凭据/配置项应已彻底移除
+  const cfg = resolveConfig(undefined)
+  assert.equal(cfg.speech.resourceTtsV1, undefined, 'config.speech 不应再有 resourceTtsV1')
+  assert.equal(
+    resourceForVoice('zh_male_x_mars_bigtts', { resourceTtsV1: 'volc.service_type.10029' }),
+    'seed-tts-2.0',
+    '即使外部传入 resourceTtsV1 也必须被忽略（该配置项已废弃）',
+  )
+})
+
+test('synthesizeSpeech：克隆音色走 seed-icl-2.0，普通音色走 seed-tts-2.0', async () => {
   await withWorkspace(async (cwd) => {
     const audio = mp3Bytes(13, 0x3c)
     const fetchImpl = recordingFetch(() => streamResponse(sseFramesForAudio(audio)))
@@ -1011,12 +1035,12 @@ test('synthesizeSpeech：请求头里的 X-Api-Resource-Id 跟随音色，而不
         creds: speechCreds(),
         store: countingStore(cwd),
         text: '测试。',
-        // 1.0 代音色：必须用 volc.service_type.10029，否则 200 + 空音频
-        voice: 'zh_male_beijingxiaoye_emo_v2_mars_bigtts',
+        // 克隆音色（S_ 前缀）必须换资源，否则上游报 mismatch
+        voice: 'S_clonevoice1234',
       },
       { fetchImpl },
     )
     assert.equal(fetchImpl.calls.length, 1)
-    assert.equal(fetchImpl.calls[0].headers['X-Api-Resource-Id'], 'volc.service_type.10029')
+    assert.equal(fetchImpl.calls[0].headers['X-Api-Resource-Id'], 'seed-icl-2.0')
   })
 })

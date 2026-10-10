@@ -12,7 +12,7 @@ type Config = {
   ark: { baseUrl, credential, imageModel, videoModel,
          requestTimeoutMs, rateLimitRetries, rateLimitBackoffMs, downloadTimeoutMs },
   speech: { mode, baseUrl, apiKeyCredential,
-            resourceTts, resourceTtsClone, resourceTtsV1, resourceAsr,
+            resourceTts, resourceTtsClone, resourceAsr,
             voice, format, sampleRate, maxCharsPerRequest },
   output: { dir, previewRoute },
 }

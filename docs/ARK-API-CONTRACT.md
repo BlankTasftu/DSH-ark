@@ -131,7 +131,7 @@ prompt 里说清的画幅）。
 |---|---|
 | Base URL | `https://openspeech.bytedance.com/api/v3` |
 | 认证 | **只用 `X-Api-Key`**（唯一方案；旧版 App ID + Access Token 已移除） |
-| 资源 | `X-Api-Resource-Id`：`seed-tts-2.0`（2.0 代音色）/ `seed-icl-2.0`（声音克隆）/ `volc.service_type.10029`（1.0 代音色）/ `volc.seedasr.sauc.duration`（ASR） |
+| 资源 | `X-Api-Resource-Id`：`seed-tts-2.0`（TTS 音色）/ `seed-icl-2.0`（声音克隆）/ `volc.seedasr.sauc.duration`（ASR）。注意**音频生成不用这个头** —— 它走 `model: seed-audio-1.0`，见 §2.1.1 |
 | 排障 | 响应头 `X-Tt-Logid`；响应体的数据帧里还有 `reqid` |
 
 ### 2.0 鉴权：只用 API Key（实测确认后收敛到一条路）
@@ -316,19 +316,33 @@ HTTP 200
 
 | 音色名特征 | 资源 id | 说明 |
 |---|---|---|
-| `S_` / `clone_` 开头 | `seed-icl-2.0` | 声音克隆 |
-| 含 `uranus` | `seed-tts-2.0` | **2.0 代**音色（绝大多数 `*_uranus_bigtts` 与 `ICL_uranus_*_tob`） |
-| 含 `_bigtts`（且不含 uranus） | `volc.service_type.10029` | **1.0 代**音色（如 `*_emo_v2_mars_bigtts`） |
-| 认不出 | 回落到配置默认 | 宁可让上游报错，也不要瞎猜资源 |
+| `S_` / `clone_` 开头 | `seed-icl-2.0` | 声音克隆（该资源已确认存在） |
+| 其余全部 | `seed-tts-2.0` | TTS 音色；不匹配时由上游报准确的 `55000000` |
 
 实现见 `lib/volc-tts.mjs` 的 `resourceForVoice()`，回归用例见
-`tests/volc-tts.test.mjs`。可用 `config.speech.resourceTts / resourceTtsClone /
-resourceTtsV1` 覆盖。
+`tests/volc-tts.test.mjs`。可用 `config.speech.resourceTts / resourceTtsClone` 覆盖。
 
-**音色从哪查**：官方「在线音色列表」是 JS 渲染页面，抓取不到表格；可用的镜像整理版见
-[ark-tts/references/voices.md](https://github.com/franklu0819-lang/agent-skills/blob/main/ark-skills/ark-tts/references/voices.md)
-（200+ 音色，含"可爱女生 / 甜美娇俏 / 元气甜妹 / 软萌糖糖"这类角色音色）。
-注意 `*_uranus_bigtts` 是 2.0 代、`*_mars_bigtts` 是 1.0 代，两者资源不同。
+#### ⚠️ 一个已删除的错误分支（记录以免重犯）
+
+我曾按"`*_mars_bigtts` 是 **1.0 代**音色"给它们路由到 `volc.service_type.10029`。
+**这个资源并不存在。** 实测：用**已确认可用**的 2.0 音色去配它，照样返回
+`45000030 requested resource not granted`；对照组 `seed-tts-2.0` 正常出音频 ⇒
+问题出在资源 id 本身，不是音色。
+
+更糟的是**它把错误信息变差了**：用户看到"资源未授权"，会去控制台白折腾开通，
+而真相只是"这个音色不属于这个资源"（`55000000`）。现在该分支已删除，回落 `seed-tts-2.0`。
+
+**当初为什么会错**：`_mars_bigtts` / `_uranus_bigtts` 的"代"划分来自**第三方整理的音色表**，
+不是官方口径。而官方产品线里 **TTS 与 SeedAudio 音频生成是两回事** ——
+不能因为都带 "1.0" 就把 `seed-audio-1.0`（音频生成模型）当成"1.0 代 TTS"。
+这正是最初出错的根源。
+
+> 教训：**不要凭命名的"代际"推测资源 id。** 拿不准就回落已知值，
+> 让上游给出准确的错误码 —— 猜一个资源名只会把可诊断的错误变成误导性的错误。
+
+**音色从哪查**：官方「在线音色列表」是 JS 渲染页面，抓取不到表格；第三方镜像整理版见
+[ark-tts/references/voices.md](https://github.com/franklu0819-lang/agent-skills/blob/main/ark-skills/ark-tts/references/voices.md)。
+⚠️ 那份表里的"代"划分与音色 id **未经官方确认**，本插件已不再据此推断资源。
 
 **响应解析的硬性要求（有两个真实踩坑点）：**
 
