@@ -52,7 +52,7 @@ const prompt = arg(
   'prompt',
   '用温柔清澈的少女嗓音，轻快而愉快地说出这句话：你好呀！喜欢我送给你的礼物吗？',
 )
-const cwd = arg('out', 'E:/DeepSeek/插件')
+const cwd = arg('out', process.cwd())
 
 const creds = createCredentialResolver({
   getCredentials: () => ({ resolve: async (r) => (refs[r] ? { value: refs[r] } : undefined) }),

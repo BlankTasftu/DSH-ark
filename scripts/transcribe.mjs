@@ -40,7 +40,7 @@ function arg(name, fallback) {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback
 }
 
-const cwd = arg('out', 'E:/DeepSeek/插件')
+const cwd = arg('out', process.cwd())
 const audioArg = arg('audio')
 if (!audioArg) {
   console.error('用法: node scripts/transcribe.mjs --audio <工作区内音频路径>')

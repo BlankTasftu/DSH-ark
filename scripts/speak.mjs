@@ -42,7 +42,7 @@ try {
   const result = await synthesizeSpeech({
     config,
     creds,
-    store: new ArtifactStore({ cwd: 'E:/DeepSeek/插件' }),
+    store: new ArtifactStore({ cwd: process.cwd() }),
     text: '你好呀！喜欢我送给你的礼物吗？',
     voice,
     ...(emotion ? { emotion } : {}),

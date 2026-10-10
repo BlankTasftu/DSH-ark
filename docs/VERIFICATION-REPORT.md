@@ -531,7 +531,7 @@ node <工作区>\_recon\verify\v4-tts-stream.mjs                     # TTS 解�
 node <工作区>\_recon\verify\v10-docs-vs-code.mjs                  # 文档一致性
 ```
 
-> 说明：这些脚本用 `file:///E:/DeepSeek/%E6%8F%92%E4%BB%B6/dsh-ark/lib/*.mjs` 形式的 URL 直接 import 被测模块（Windows 上 ESM 不接受裸盘符路径），因此**不需要** `stub-dsh-loader`（只有 `tests/*.test.mjs` 因为 import `lib/index.js` 才需要它）。临时沙箱目录为 `<工作区>\_recon\verify\sandbox*` 与 `E:\_arkverify`（含 junction，验证后可整体删除）。
+> 说明：这些脚本用 `file:///<绝对路径>/lib/*.mjs` 形式的 URL 直接 import 被测模块（Windows 上 ESM 不接受裸盘符路径），因此**不需要** `stub-dsh-loader`（只有 `tests/*.test.mjs` 因为 import `lib/index.js` 才需要它）。临时沙箱目录为 `<工作区>\_recon\verify\sandbox*` 与 `<临时盘>:\_arkverify`（含 junction，验证后可整体删除）。
 
 ---
 
