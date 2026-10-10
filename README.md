@@ -1,9 +1,16 @@
 # dsh-ark
 
-**把火山方舟（Volcengine Ark）的生成能力接进 DeepSeek Harness：图像资产、视频生成，以及豆包语音（合成 / 识别 / 音频生成），模型可直接调用。**
+**把火山方舟（Volcengine Ark）的生成能力接进 DeepSeek Harness：图像生成、视频生成，以及豆包语音（合成 / 识别 / 音频生成），模型可直接调用。**
 
 零运行时依赖（只用 Node 内置能力 + DSH 宿主已有的 peer 包），密钥走 DSH 凭据服务不落明文，
 所有产物落盘到工作区而不是只回传 24 小时失效的临时直链。
+
+[![test](https://img.shields.io/badge/tests-169%20passing-brightgreen)](#开发)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![dsh](https://img.shields.io/badge/dsh-%E2%89%A50.2.0--rc.2-blue)](#环境要求)
+
+> **快速安装**：应用内 **插件 → 安装 → 安装源** 填 `github:BlankTasftu/DSH-ark`，
+> 重启应用，然后在插件详情页填两个密钥即可。详见[安装](#安装)。
 
 ---
 
@@ -70,19 +77,65 @@
 
 ## 安装
 
-```sh
-# 本地路径安装（开发用）
-dsh plugin --profile desktop add "E:\DeepSeek\插件\dsh-ark"
+本插件是一个 **DSH bundle**（`package.json` 里有 `dsh.bundle.patch`，指向
+[`cordis.patch.yml`](cordis.patch.yml)）。安装后它会把自己插进 profile 配置树，
+在下次加载该 profile 时挂载。
 
-# 从 npm 安装（若已发布）
-dsh plugin --profile desktop add dsh-ark
+### 方式一：应用内安装（推荐）
+
+1. 打开 DSH → 侧栏 **插件**
+2. 点 **安装**，在「**安装源**」里填入下面任意一个：
+
+```
+github:BlankTasftu/DSH-ark
 ```
 
-安装后 `dsh-ark` 会被追加到该 profile 的 `dsh.profile.bundles`，并在下次启动 profile 时挂载。
+```
+https://github.com/BlankTasftu/DSH-ark
+```
 
-> **重要**：`desktop`（Electron 桌面端）profile 由应用独占管理，改动后需要**重启桌面应用**才会生效；
-> 桌面端还可能在启动时重新生成 profile 配置，若发现插件未挂载，请以应用内的插件页面为准。
+```
+git+https://github.com/BlankTasftu/DSH-ark.git
+```
 
+3. 安装完成后**重启应用**，工具才会注册到会话里
+
+> 为什么必须重启：工具注册与客户端 bundle 是在启动时组合的。
+> 设置页里的密钥保存**不需要**重启（走凭据服务热更新），但工具本身需要。
+
+### 方式二：命令行（装了 DSH CLI 的环境）
+
+```sh
+dsh plugin --profile <profile名> add github:BlankTasftu/DSH-ark
+# 也接受 install 写法：
+dsh plugin --profile <profile名> install https://github.com/BlankTasftu/DSH-ark
+```
+
+桌面端（`desktop` profile）由应用独占管理，命令行改完同样需要重启应用。
+
+### 方式三：从源码
+
+```sh
+git clone https://github.com/BlankTasftu/DSH-ark.git
+cd DSH-ark
+npm test          # 169 个用例，不需要网络也不需要密钥
+```
+
+本地开发时也可以用绝对路径安装：`dsh plugin --profile <name> add <绝对路径>`。
+
+### 卸载
+
+应用内插件页面移除 `dsh-ark`，或：
+
+```sh
+dsh plugin --profile <profile名> remove dsh-ark
+```
+
+### 环境要求
+
+- **DSH ≥ 0.2.0-rc.2**（`package.json` 的 `peerDependencies` 绑定了该版本线）
+- **Node ≥ 22.19.0**
+- 无需任何运行时依赖：插件只用 Node 内置能力 + DSH 宿主已有的 peer 包
 ---
 
 ## 配置
@@ -98,6 +151,9 @@ DSH 会在运行时按它重建插件实例）。完整默认值见 [`cordis.pat
 |---|---|---|
 | `ARK_API_KEY` | 图像 / 视频（方舟数据面） | 火山方舟控制台 → API Key 管理 |
 | `VOLCENGINE_SPEECH_API_KEY` | 语音合成 / 识别 / 音频生成 | 火山引擎控制台 → **语音技术** → API Key 管理 |
+
+> 两把是**不同产品**的凭据，互不通用：`ark-` 开头的方舟 Key 不能用于语音，
+> 语音的 Key 也不能用于图像 / 视频。
 
 **怎么把密钥交给 DSH**（三选一，按优先级）：
 
@@ -127,7 +183,7 @@ DSH 会在运行时按它重建插件实例）。完整默认值见 [`cordis.pat
     speech:
       mode: sse                    # sse（默认）| ndjson
       apiKeyCredential: VOLCENGINE_SPEECH_API_KEY   # 语音唯一凭据（X-Api-Key）
-      resourceTts: seed-tts-2.0    # TTS 音色（实测可用）
+      resourceTts: seed-tts-2.0    # 2.0 代音色
       resourceTtsClone: seed-icl-2.0  # 声音克隆（资源存在）
       resourceAsr: volc.seedasr.sauc.duration
       voice: zh_female_shuangkuaisisi_uranus_bigtts
@@ -174,7 +230,7 @@ Origin 与 Host 不同源、缺 Host —— 一律 403。它只按登记表里�
 ## 开发
 
 ```sh
-cd "E:\DeepSeek\插件\dsh-ark"
+cd "<工作区>\dsh-ark"
 
 # 全量单测（133 个用例，零网络请求）
 npm test
