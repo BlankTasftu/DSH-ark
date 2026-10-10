@@ -1,0 +1,60 @@
+# ============================================================================
+# dsh-ark —— DSH bundle patch
+# ============================================================================
+# 把火山方舟能力插件挂进 profile 配置树。DSH 启动时按 bundle 层栈叠加各插件
+# patch，本文件负责把 dsh-ark 这一行插进去。
+#
+# 安装（推荐在应用内「插件 → 安装 → 安装源」里填）：
+#   github:BlankTasftu/DSH-ark
+# 或命令行：
+#   dsh plugin --profile <name> add github:BlankTasftu/DSH-ark
+# 卸载：
+#   dsh plugin --profile <name> remove dsh-ark
+#
+# 安装/卸载后需**重启应用**（工具注册在启动时组合）。
+# 设置页里改密钥不需要重启（走凭据服务热更新）。
+#
+# 非敏感配置写在下面这一行的 config 块里（页面保存也写这里，是唯一存储）；
+# 密钥一律走 DSH 凭据服务（ctx.credentials），不落在本文件。
+# ============================================================================
+
+- insert:
+    - id: dsh-ark
+      name: dsh-ark
+      config:
+        # —— Ark（方舟数据面）——
+        ark:
+          baseUrl: https://ark.cn-beijing.volces.com/api/v3
+          # 凭据名（DSH credentials 里的 key），不是密钥本身
+          credential: ARK_API_KEY
+          # ⚠️ 模型 ID 必须选"当前在售"的版本化 ID：已 Retiring/Shutdown 的 ID 会返回
+          # HTTP 404 InvalidEndpointOrModel.NotFound（与"没开通"报错相同，极易误判）。
+          # 换之前先用 GET /api/v3/models 确认 status。以下两个已在本机账号实测可用。
+          imageModel: doubao-seedream-5-0-pro-260628
+          videoModel: doubao-seedance-2-0-260128
+          requestTimeoutMs: 300000
+          rateLimitRetries: 2
+          rateLimitBackoffMs: 25000
+        # —— 火山「语音技术」通道（TTS / ASR / 音频生成）——
+        speech:
+          # 传输形式：sse 单向流式（默认） | ndjson 逐行流式
+          mode: sse
+          baseUrl: https://openspeech.bytedance.com/api/v3
+          # 鉴权只有一条路：API Key（只发 X-Api-Key）。
+          # App ID 是"请求/应用配置"而非鉴权因子；旧版 App ID + Access Token 已不再支持。
+          apiKeyCredential: VOLCENGINE_SPEECH_API_KEY
+          resourceTts: seed-tts-2.0
+          resourceTtsClone: seed-icl-2.0
+          # 1.0 代音色（*_mars_bigtts 等）用的资源；资源会自动跟随音色名推断。
+          # 注意：本机账号未授权 1.0 代资源与声音克隆资源，实测只有 seed-tts-2.0 可用。
+          resourceTtsV1: volc.service_type.10029
+          resourceAsr: volc.seedasr.sauc.duration
+          voice: zh_female_shuangkuaisisi_uranus_bigtts
+          format: mp3
+          sampleRate: 24000
+          # 单次请求文本上限（超出按标点分句后串行合成再拼接）
+          maxCharsPerRequest: 200
+        # —— 产物落盘与预览 ——
+        output:
+          dir: ark-output
+          previewRoute: true
