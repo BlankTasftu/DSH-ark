@@ -22,6 +22,48 @@ function bootHost(pluginConfig = {}, services = {}, builtins = ['tools']) {
   return host
 }
 
+/**
+ * ⚠️ 回归：`Config` 必须挂在**默认导出对象**上。
+ *
+ * 这条测试对应一个真实、且症状极具误导性的 bug：设置页的「能力开关」整排是灰的、
+ * 点了没反应，控制台没有任何报错。
+ *
+ * 根因：Cordis 建插件运行记录时读的是**默认导出对象**的属性
+ * （`@deepseek-ai/cordis` 的 `Registry.plugin()`：`runtime = { ..., Config: plugin.Config }`），
+ * 而 `plugin` 是 Loader `unwrapExports(exports)` 归一化后的结果
+ * （`exports.default ?? exports`）—— 它取走 `default` 之后，**具名导出就不可见了**。
+ *
+ * 所以只写 `export { Config }` 是不够的：`plugin.Config` 为 `undefined`
+ * → `runtime.Config` 为空 → 宿主 `settings.describe()` 跳过本条目
+ * → 客户端 `configForms.get('dsh-ark')` 的 scope 永远不 ready → 开关全灰。
+ *
+ * 这条断言之所以必须有：测试文件里 `import plugin from '../lib/index.js'` 拿到的
+ * 正是那个默认导出对象，而在这个 bug 存在期间，**没有任何测试引用过 `plugin.Config`**，
+ * 于是它一路溜到了用户手上。
+ */
+test('Config schema 挂在默认导出对象上（Cordis 只读 plugin.Config，具名导出会被丢掉）', () => {
+  assert.ok(plugin.Config, 'plugin.Config 必须有值 —— 否则设置页的能力开关永远是灰的')
+  assert.equal(typeof plugin.Config.toJSON, 'function', 'Config 应当是 schemastery schema（宿主判据是 toJSON 可调用）')
+  assert.equal(plugin.Config['~standard']?.vendor, 'schemastery', '~standard.vendor 必须是 schemastery')
+
+  // 真正要落到表单里的字段：capabilities.<name> —— 路径必须与 resolveCapabilities 读的一致。
+  const json = plugin.Config.toJSON()
+  const cap = json.dict && json.dict.capabilities
+  assert.ok(cap, 'Config 里必须有 capabilities 字段')
+  assert.deepEqual(
+    Object.keys(cap.dict || {}).sort(),
+    ['audio', 'credentialStatus', 'image', 'speech', 'threeD', 'transcribe', 'video'].sort(),
+    'capabilities 的 7 个键必须齐全（少一个 = 那个能力在页面上关不掉）',
+  )
+  for (const [key, field] of Object.entries(cap.dict)) {
+    // volatile 决定"能不能实时改"：宿主 write() 逐条过 isVolatilePath，
+    // 打在叶子上才对；打在 capabilities 对象上会连带把子字段判成不可写。
+    assert.equal(field.meta?.volatile, true, `${key} 必须是 volatile（否则宿主拒绝写入）`)
+    assert.equal(field.meta?.default, true, `${key} 默认必须是 true（不写 = 开启）`)
+  }
+  assert.notEqual(cap.meta?.volatile, true, 'capabilities 自身不该 volatile（与"只给叶子打标记"的约定一致）')
+})
+
 test('插件注册了全部 7 个工具，且名字稳定', () => {
   const host = bootHost()
   assert.deepEqual(
@@ -36,6 +78,45 @@ test('插件注册了全部 7 个工具，且名字稳定', () => {
       'ark_transcribe',
       ].sort(),
   )
+})
+
+test('能力开关：关掉的能力，其工具**不被注册**（这是省 token 的唯一成立方式）', () => {
+  // 关掉图像与语音合成，其余保持默认
+  const host = bootHost({ capabilities: { image: false, speech: false } })
+  const names = [...host.tools.keys()].sort()
+  assert.equal(names.includes('ark_generate_image'), false, '关掉的图像能力不该注册其工具')
+  assert.equal(names.includes('ark_speak'), false, '关掉的语音合成能力不该注册其工具')
+  // 未关的能力必须照常注册（不能误伤）
+  for (const kept of [
+    'ark_generate_video',
+    'ark_generate_3d',
+    'ark_generate_audio',
+    'ark_transcribe',
+    'ark_credential_status',
+  ]) {
+    assert.equal(names.includes(kept), true, `${kept} 应仍然注册`)
+  }
+  assert.equal(names.length, 5, `应注册 5 个工具，实际 ${names.length}：${names}`)
+})
+
+test('能力开关：全部关掉时只剩 0 个工具，且不报错', () => {
+  const all = Object.fromEntries(
+    ['image', 'video', 'threeD', 'speech', 'audio', 'transcribe', 'credentialStatus'].map((k) => [k, false]),
+  )
+  const host = bootHost({ capabilities: all })
+  assert.equal(host.tools.size, 0)
+})
+
+test('能力开关：写错类型不会静默禁掉能力（必须仍是 7 个）', () => {
+  const host = bootHost({ capabilities: { image: 'false', video: 0, speech: null } })
+  assert.equal(host.tools.size, 7, '只有显式 false 才该关闭')
+})
+
+test('能力开关：enabled 标记不得泄漏进注册的工具定义', () => {
+  const host = bootHost()
+  for (const [name, tool] of host.tools) {
+    assert.equal('enabled' in tool, false, `${name} 的定义里不该残留 enabled 标记`)
+  }
 })
 
 test('工具描述里写明了计费与异步语义（模型据此决策，不能丢）', () => {

@@ -1,22 +1,7 @@
-# 依赖与构建产物
-node_modules/
-pnpm-lock.yaml
-package-lock.json
-yarn.lock
-
-# 运行期产物（生成的图片 / 音频 / 视频）
-ark-output/
-
-# 本地凭据与勘察脚本 —— 绝不入库
-.env
-.env.*
-*.credentials.yaml
-_recon/
-_backup/
-
-# 编辑器 / 系统
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
-*.log
+# 排障探针（由 lib/index.js 的 writeProbe() 生成）—— 不进仓库。
+#
+# 用途：能力开关"没生效"的四种失败模式在页面上长得完全一样（工具照旧在），
+# 只看现象无法区分。这个文件把「这一次 apply/重建看到的开关与结果」落盘，
+# 一眼定位是哪一层。它的 `at` 时间戳还用来判断"改了 lib/index.js 到底生效了没有"
+# —— 宿主侧 ESM 模块被 Node 缓存，重载插件不会重新读文件，只有重启 DSH 才会。
+.apply-probe.json

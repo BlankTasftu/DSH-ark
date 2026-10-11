@@ -53,8 +53,19 @@ function arg(name, fallback) {
 
 const refs = fileBackedCredentials()
 console.log('凭据文件读取：命中 %d 项', Object.keys(refs).length)
+/**
+ * 只报"有没有"和"多长"，**绝不切字符**（安全审计 F3）。
+ *
+ * 原实现打印 `v.slice(0,2)}…${v.slice(-2)`，而 1 字符 → `a…a`（**等于原文**）、
+ * 2 字符 → `ab…ab`（等于原文）、3 字符 → 泄露 2/3。这正是 `lib/index.js` 的
+ * `maskSecret` 已经修掉的退化，脚本里没修 —— 而且注释还写着"绝不打印密钥内容"，
+ * 文档与实现相反。
+ *
+ * 另外这里遍历的是**整个凭据文件**（不只本插件那两把），别的插件/服务的密钥
+ * 也会被一并打印。所以干脆只输出名字与长度。
+ */
 for (const [k, v] of Object.entries(refs)) {
-  console.log('  %s -> %s…%s（%d 字符）', k, v.slice(0, 2), v.slice(-2), v.length)
+  console.log('  %s -> 已读取（%d 字符）', k, String(v).length)
 }
 
 const config = resolveConfig(undefined)

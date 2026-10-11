@@ -16,6 +16,161 @@
 > 于是"从 main 装到的"和"tag v0.1.0"是两份不同内容却同名同版本，谁也没法从版本号
 > 判断自己装的是哪一份。详见下方「早期的快照标签」。
 
+## [0.3.0] - 2026-10-12
+
+**设置页新增「能力开关」：关掉用不到的能力，它的工具就不再注册。翻开关当场生效。**
+
+### 新增
+
+**能力开关（设置页）**
+
+在「插件 → 已安装 → dsh-ark」详情页新增一节，7 项能力各一个开关，一点即存：
+
+| 开关 | 关掉后不再注册的工具 |
+|---|---|
+| 图像生成 | `ark_generate_image` |
+| 视频生成 | `ark_generate_video` |
+| 图生 3D | `ark_generate_3d` |
+| 语音合成 | `ark_speak` |
+| 音频生成 | `ark_generate_audio` |
+| 语音转写 | `ark_transcribe` |
+| 凭据自检 | `ark_credential_status` |
+
+**是"不注册"而不是"注册后拒绝执行"**：工具 schema 会进模型上下文，关掉的能力若仍注册，
+模型仍会看到并可能去调它 —— 既浪费 token，也让它以为该能力可用。
+
+- 开关**点一下即存**，与上方密钥区的「保存」按钮互不相干（密钥要提交，开关不用）。
+- **翻开关当场生效，不需要重启或重载插件**（见下方"修缺陷"里的机制说明）。
+- 每项开关旁有明确状态文字（已开启 / 已关闭 / 保存中）。
+- 语义：**只有显式 `false` 才关闭**，不写 = 开启；未知键忽略。
+
+**运行时可观测性**
+
+`ark_credential_status`（零计费、只读）额外自述运行时状态：逐项能力开关现值、当前实际
+注册的工具名、重建次数与时刻、收到的配置事件。用于排查"开关没生效"这类问题 ——
+它的四种失败模式在页面上长得完全一样。
+
+### 修缺陷
+
+这一版修了 5 个缺陷，前 4 个都表现为"功能看起来在、其实不生效"，且**都没有任何报错**。
+
+**① 能力开关写不进去（宿主拒绝每一次写）**
+
+`ctx.configForms.get(...).set('capabilities', {...})` 寻址的是 `['capabilities']`，
+而本插件的 `.volatile()` 只打在叶子上 —— 宿主 `settings.write()` 对每条路径都过一遍
+`isVolatilePath()`，不通过就抛 `Config field "capabilities" is not volatile`。
+客户端只看到一个 `false`，表现为"点了开关又弹回去"。改为逐键
+`mutate([{op, path: ['capabilities', <key>]}])`，路径落在 volatile 叶子上。
+
+**② `Config` 没挂到默认导出对象上，设置页整排开关是灰的**
+
+Cordis 建插件运行记录时读的是**默认导出对象**的属性
+（`runtime = { ..., Config: plugin.Config }`），而 Loader 的 `unwrapExports(exports)`
+会先取走 `default` —— 具名 `export { Config }` 在那之后**不可见**。
+于是 `runtime.Config` 为空 → 宿主 `describe()` 跳过本条目 → 客户端拿到的
+配置 scope **永远不 ready** → 按设计不发写请求 → 开关全灰、点击无反应、零报错。
+修法：`Config` 同时具名导出**并**挂到默认导出对象上。
+
+**③ 关了能力，工具照旧在（volatile 变更不会重跑 `apply`）**
+
+`capabilities.*` 都是 volatile 字段，而 Loader 对"只改了 volatile 值"的配置变更走
+**快速路径**（`volatileOnly ? this.fiber._config = ... : changes`，随后
+`if (!pending.length && !force) return`）—— 它**只更新运行中的引用，不重启插件、
+不再调 `apply()`**。而工具是在 `apply` 时注册的，于是注册表永远停在首次的样子。
+修法：工具定义与注册解耦，监听 `loader/volatile-update` 后重建注册表。
+
+**④ 关掉的开关全被判成开启（volatile 字段是引用对象，不是布尔值）**
+
+这是最难查的一个。运行中的 `.volatile()` 字段值是
+
+```js
+{ get: () => <当前值>, [Symbol(cosmokit.volatile.write)]: <写入器> }
+```
+
+而不是 `false`。`resolveCapabilities` 的规则是"只有显式 `false` 才关闭"，
+于是 `ref === false` **恒不成立** → 7 项全判成开启 → 关了能力工具照旧在。
+
+它的欺骗性在于 `JSON.stringify(ref)` 是 `'{}'`，看起来像"没配置"，完全看不出
+真实值是 `false`。修法：新增 `unwrapVolatile()` 先解包再判定；判据用结构化鸭子类型
+（`get` + cosmokit 的写符号），不引入未声明的传递依赖。
+
+**⑤ 设置页保存按钮位置反直觉**
+
+DSH 的 `SettingsForm` 把保存按钮**硬编码在 children 之后**，塞进 children 的内容
+只能排在按钮上面 —— 按钮孤零零吊在最下面，看上去像"整页的提交键"。
+改为不用 `SettingsForm`，用 primitives 自己排版：**密钥 → 保存按钮 → 能力开关**。
+
+**⑥ `ark_generate_3d` 的 ZIP 解包从来没能成功过（严重）**
+
+`lib/http.mjs` 下载产物返回的是**普通 `Uint8Array`**，而 `lib/ark-3d.mjs` 的 ZIP 解析
+调的是 **Buffer 专有方法**（`readUInt32LE` / `readUInt16LE` / `subarray`）。
+`Uint8Array` 上这些方法是 `undefined` → `TypeError` → 被 `save3dModel` 吞成一条 warning。
+
+而 Seed3D 的 `file_url` 给的**就是 ZIP**（上游声称 `fileformat: glb`），
+所以这是 3D 的**主路径**：**任务成功、已计费，却交付不出模型** ——
+用户只看到"没效果"，没有任何报错。
+
+测试当时全绿是因为测试只喂 `Buffer`，且 `waitFor3d` / `save3dModel` /
+`unwrapModelPayload` 在测试里**零引用**。现在在 3 个入口做一次类型归一，覆盖 16 个
+调用点，并补了「真实 `Uint8Array` 走完整主路径且 `warnings` 必须为空」的测试。
+
+**⑦ 预览路由的"仅本机"只看 `Host` 头**
+
+`Host` 是客户端**自报家门**的，任何能连到该端口的进程都能写
+`Host: 127.0.0.1:19387` 通过校验。现在叠加 `req.socket.remoteAddress` 判定（"与"关系）。
+
+同时按白名单收敛响应 `Content-Type`，并补 `X-Content-Type-Options: nosniff` 与
+`Content-Disposition: attachment` —— 原本会原样回显**上游响应头**里的 MIME，
+而本路由与 DSH GUI **同源**，一个 `text/html` 产物就构成对 harness 的存储型 XSS
+（纵深防御缺口，触发需上游被控制）。
+
+**⑧ 超时被误判成"调用已被取消"**
+
+`signal` 是 `AbortSignal.any([调用方 signal, AbortSignal.timeout(...)])`，
+而 `AbortSignal.timeout` 触发时**也会**把 `signal.aborted` 置为 `true`。
+原判定写成 `if (signal.aborted || err?.name === 'AbortError')`，左支先命中 →
+**超时报成"已被取消"**。两者对模型的含义相反：取消不该重试、超时可以重试。
+改为先判 `err.name`。
+
+**⑨ 单次 `status` 查询把"仍在渲染"说成"未成功"**
+
+`renderVideoStatus` / `render3dStatus` 只判 `timedOut`，而单次
+`action: "status"` 查询天生 `timedOut=false` + `status='running'`。
+文案说"任务未成功"会**诱导模型重新提交**，而视频**按秒计费、单价最高**
+—— 一次误判就是一次重复扣费。现在"仍在跑"的状态单独识别。
+
+**⑩ 多句语音合成时，某一句被截断会被静默交付**
+
+`endMarkerSeen` 被声明在分句循环**外面**并跨句累加，而它同时决定"是否跳过
+padding 校验"。于是第 1 句的结束标记会让**第 2 句的截断**通过校验 →
+**截断的音频被当完整产物交付**（听起来没问题、实际少了半句，零报错）。
+现在每句各自判定，且按「上游明确错误 → 文件头 → 结束标记」的顺序报最具体的原因。
+
+### 安全加固
+
+一次独立对抗式安全审计（0 critical / 0 high / 1 medium / 5 low）后的修复：
+
+- **凭据值若含控制字符（`\r` / `\x00`），会被 undici 逐字回显进错误消息**，
+  再经工具返回值进模型上下文与会话记录（会话记录可导出、可分享）。
+  三层修复：**源头拒控制字符** + **出口兜底脱敏** + 报错不回显凭据值。
+  （`\r` 很容易带进来：Windows 剪贴板、脚本里的 `"…\r\n"`。）
+- **凭据名被原样打印**：把密钥误填进配置的"凭据名"字段时（真实且常见的误操作，
+  尤其是让模型代改配置），**恰恰是那个用来排障的免费工具**把密钥打印给了模型。
+  新增形状校验，不像凭据名就不回显。
+- **产物预签名直链被写进模型可见文本**：直链是 TOS 预签名 URL，24 小时内谁拿到
+  都能取走产物。下载失败的警告现在只保留 host + path，丢掉签名 query。
+- `scripts/generate.mjs` 曾打印凭据的**首尾各 2 个字符**（1–2 字符时等于全文），
+  而它自己的注释写着"绝不打印密钥内容" —— 注释与实现相反。改为只报名字与长度。
+
+### 已知限制
+
+- **视频生成（`ark_generate_video`）未经真实测试**：Seedance 视频模型需
+  **最低充值 200 元**才能开通，本项目测试账号未开通，提交时上游返回 `ModelNotOpen`。
+  请求体构造、轮询、下载都有单测覆盖，但"能否真的生成出视频"**没有端到端验证**。
+  首次使用请用最低档参数试跑。详见 README 的警示框。
+- 修改 `lib/index.js` 后必须**重启 DSH** 才生效：宿主侧 ESM 模块被 Node 缓存，
+  "重载插件"（dispose + 重新 mount）不会重新读文件。改 `lib/client.js` 则刷新页面即可。
+
 ## [0.2.0] - 2026-10-11
 
 **功能新增一个能力（图生 3D），并修复一个会让产物写到工作区外的缺陷。**

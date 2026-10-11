@@ -55,3 +55,42 @@
         output:
           dir: ark-output
           previewRoute: true
+        # —— 能力开关（可选）——
+        #
+        # 用途：关掉用不到的能力，它的工具就**不会被注册**，也就不进模型的工具表
+        #       （省 token；也让模型不会去调一个你根本不想付费的能力）。
+        #
+        # 语义（三条，都已在 tests/capabilities.test.mjs 里钉住）：
+        #   · **只写 false 表示关闭**；不写 = 开启。所以下面的注释即是"全开"的默认态。
+        #   · 只有**显式 false** 才关闭 —— 写成 'false' / 0 / null 都视为开启，
+        #     避免一个类型笔误静默禁掉能力、而你以为它还开着。
+        #   · 未知键忽略。
+        #
+        # 可用的键（对应工具）：
+        #   image            ark_generate_image     图像生成（Seedream）
+        #   video            ark_generate_video     视频生成（Seedance，按秒计费）
+        #   threeD           ark_generate_3d        图生 3D（Seed3D，按次计费）
+        #   speech           ark_speak              语音合成（TTS）
+        #   audio            ark_generate_audio     音频生成（SeedAudio）
+        #   transcribe       ark_transcribe         语音转写（ASR）
+        #   credentialStatus ark_credential_status  凭据自检（零计费，排障用）
+        #
+        # 例：只要图像与语音合成，其余全关 ——
+        #   capabilities:
+        #     video: false
+        #     threeD: false
+        #     audio: false
+        #     transcribe: false
+        #     credentialStatus: false
+        #
+        # 改完**立即生效**，不需要重载插件：能力开关是 volatile 字段，DSH 改它时走
+        # "只更新运行中的引用"的快速路径（不重启插件），插件监听
+        # `loader/volatile-update` 后当场重建工具注册表。
+        #
+        # 注：这里有**可视化开关界面** —— 在「插件 → 已安装 → dsh-ark」详情页的
+        # 「能力开关」一节，点一下即存（走 DSH 官方设置表单，带 revision 栅栏）。
+        # 存的就是下面这一块。手写本文件与页面改的是同一处，两边等价。
+        #
+        # 页面上的开关**不做乐观更新**：显示的一律是宿主已接受的值，
+        # 写失败会明确提示，避免"以为关了其实还开着"。
+        capabilities: {}

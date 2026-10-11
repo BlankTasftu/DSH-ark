@@ -43,6 +43,8 @@ export function createHost({ config, services = {}, builtins = [] } = {}) {
   const routes = []
   const effects = []
   const logs = []
+  /** 事件名 → 监听器集合，供 `emitEvent` 派发。 */
+  const eventListeners = new Map()
 
   // 可用的服务名 = 显式注入的服务 + 由 builtins 声明的宿主内建能力。
   // 刻意不默认提供 tools/webServer：插件必须自己 inject 声明，测试也要能验证
@@ -88,6 +90,19 @@ export function createHost({ config, services = {}, builtins = [] } = {}) {
         effects.push(dispose)
         return () => {}
       },
+      /**
+       * 事件监听：DSH 的 Cordis ctx.on。
+       *
+       * 必须真的能触发（见 `emitEvent`）—— 本插件的"关掉能力后工具消失"
+       * 完全依赖 `loader/volatile-update` 这个事件，桩只记录不派发的话，
+       * 那条最核心的行为就测不到。
+       */
+      on(event, listener) {
+        const set = eventListeners.get(event) ?? new Set()
+        set.add(listener)
+        eventListeners.set(event, set)
+        return () => set.delete(listener)
+      },
       logger: {
         info: (...args) => logs.push(['info', ...args]),
         warn: (...args) => logs.push(['warn', ...args]),
@@ -119,6 +134,22 @@ export function createHost({ config, services = {}, builtins = [] } = {}) {
     routes,
     effects,
     logs,
+    /**
+     * 派发一个事件给插件的监听器。
+     *
+     * 存在理由：用户在设置页翻能力开关时，真正发生的是 Loader 把 volatile-only
+     * 的配置变更走**快速路径**（只更新运行中的引用、**不重启插件、不再调 apply()**），
+     * 然后发一个 `loader/volatile-update`。插件靠收到它来重建工具注册表。
+     * 所以"翻开关 → 工具消失"这条链路要能被测，桩就必须能派发这个事件。
+     * @param {string} event - 事件名
+     * @param {...unknown} args - 事件参数
+     */
+    emitEvent(event, ...args) {
+      const set = eventListeners.get(event)
+      if (!set) return 0
+      for (const listener of [...set]) listener(...args)
+      return set.size
+    },
     /** 释放所有 effect（模拟插件卸载）。 */
     disposeAll() {
       for (const d of effects) {

@@ -1044,3 +1044,79 @@ test('synthesizeSpeech：克隆音色走 seed-icl-2.0，普通音色走 seed-tts
     assert.equal(fetchImpl.calls[0].headers['X-Api-Resource-Id'], 'seed-icl-2.0')
   })
 })
+
+/**
+ * ⚠️ 回归（BUG 审计 B7）：**第 1 句正常、第 2 句被截断**时必须报错，不得静默交付。
+ *
+ * 原实现把 `endMarkerSeen` 声明在分句循环**外面**并跨句累加，而它同时被用来决定
+ * "是否跳过 padding 校验"。于是：
+ *
+ *   第 1 句见到结束标记 → 变量为 true
+ *   第 2 句实际被截断（无结束标记）
+ *   → 第 2 句的判定因为变量仍为 true 而认为"流完整"
+ *   → **截断的音频被当完整产物交付**：听起来没问题，实际少了半句，且没有任何报错。
+ *
+ * 拼接后的 base64 padding 往往正好合法（前一句的尾部 padding 掩盖了后一句的缺失），
+ * 所以这个漏洞只能靠"每句各自判定"发现 —— 这也正是本测试的形态。
+ */
+test('⚠️ 回归 B7：多句时某一句被截断，必须报错且不落盘（不得静默交付截断音频）', async () => {
+  await withWorkspace(async (cwd) => {
+    // 长文本会被 maxCharsPerRequest 分成多句；这里每句一段音频。
+    const sentA = mp3Bytes(16, 0x11)
+    const sentB = mp3Bytes(16, 0x22)
+
+    // 第 1 句：完整（带结束标记）。第 2 句：**不带结束标记**（被截断）。
+    const fetchImpl = recordingFetch((_record, index) =>
+      index === 0
+        ? streamResponse(sseFramesForAudio(sentA, { endMarker: true }))
+        : streamResponse(sseFramesForAudio(sentB, { endMarker: false })),
+    )
+
+    const store = countingStore(cwd)
+    await assert.rejects(
+      () =>
+        synthesizeSpeech(
+          {
+            config: resolveConfig({ ark: { rateLimitBackoffMs: 1 }, speech: { maxCharsPerRequest: 8 } }),
+            creds: speechCreds(),
+            store,
+            text: '第一句话。第二句话。',
+          },
+          { fetchImpl },
+        ),
+      (err) => {
+        assert.equal(err.code, ARK_ERROR_CODES.BAD_RESPONSE, `应当报 BAD_RESPONSE，实际 ${err.code}：${err.message}`)
+        // 指明是第几句，否则用户不知道从哪查
+        assert.match(err.message, /第 2\/2 句|第 2 句/, `错误信息应当指明出问题的句子：${err.message}`)
+        return true
+      },
+    )
+    assert.equal(fetchImpl.calls.length, 2, '两句都应当被请求到（第 2 句才暴露问题）')
+    assert.equal(store.saves, 0, '校验失败时**绝不落盘** —— 否则截断音频会进工作区')
+  })
+})
+
+test('对照：两句都完整时必须正常交付（证明上一条不是因为"多句就报错"）', async () => {
+  await withWorkspace(async (cwd) => {
+    const sentA = mp3Bytes(16, 0x11)
+    const sentB = mp3Bytes(16, 0x22)
+    const fetchImpl = recordingFetch(() => streamResponse(sseFramesForAudio(mp3Bytes(16, 0x33), { endMarker: true })))
+    const store = countingStore(cwd)
+
+    // 用同一段音频分句请求；两句都带结束标记 ⇒ 应当成功
+    const result = await synthesizeSpeech(
+      {
+        config: resolveConfig({ ark: { rateLimitBackoffMs: 1 }, speech: { maxCharsPerRequest: 8 } }),
+        creds: speechCreds(),
+        store,
+        text: '第一句话。第二句话。',
+      },
+      { fetchImpl },
+    )
+    assert.equal(fetchImpl.calls.length, 2, '应当分成两句请求')
+    assert.equal(store.saves, 1, '两句都完整时应当正常落盘一次（拼接后一个文件）')
+    assert.ok(result.audio?.relativePath, '应当返回产物路径')
+    void sentA
+    void sentB
+  })
+})

@@ -9,6 +9,11 @@
  *  3. 解出的模型必须校验 GLB 魔数与声明长度；不一致要报错而不是交付坏文件。
  *  4. 图片以 base64 data URI 内联（实测被接受）。
  *  5. duration 之类的视频字段不该出现在 3D 请求体里。
+ *  6. **字节类型边界（P0 回归）**：`lib/http.mjs` 的 `requestBytes()` 返回的是普通
+ *     `Uint8Array`，而 ZIP 解析用的是 Buffer 专有方法（`readUInt32LE` 等）。
+ *     曾经因此抛 `TypeError: buf.readUInt32LE is not a function`，又恰好在
+ *     `save3dModel` 里被吞进 `warnings` —— 任务计费成功、模型却没交付。
+ *     所以下面同时钉住"Uint8Array 能走通"与"Buffer 仍然能走通"。
  */
 
 import { test } from 'node:test'
@@ -24,6 +29,9 @@ import {
   parseZipEntries,
   pickModelUrls,
   resolveInputImage,
+  save3dModel,
+  unwrapModelPayload,
+  waitFor3d,
   DEFAULT_3D_MODEL,
 } from '../lib/ark-3d.mjs'
 import { probeModelFile } from '../lib/artifacts.mjs'
@@ -432,4 +440,188 @@ test('create3dTask：上游没返回 id 时报错且提示不要重复提交（�
       ),
     (err) => err.code === ARK_ERROR_CODES.BAD_RESPONSE && /不要重复提交/.test(err.message),
   )
+})
+
+// ──────────────── 字节类型边界（P0 回归：Uint8Array vs Buffer） ────────────────
+//
+// 根因：`lib/http.mjs` 的 requestBytes() 返回 `new Uint8Array(await response.arrayBuffer())`，
+// 即**普通 Uint8Array**（没有 readUInt32LE / readUInt16LE，也没有 toString('utf8') 解码语义）；
+// 而 ZIP 解析全用 Buffer 专有 API。修复方式是在 parseZipEntries / extractModelFromZip /
+// unwrapModelPayload 的入口一次性 asBuffer() 归一化。
+//
+// 这些用例必须"不修就红"：把 asBuffer 改成恒等函数 `(x) => x` 后，
+// 下面带 P0 字样的用例必须失败。
+
+/** 造一个"确定不是 Buffer"的普通 Uint8Array（Buffer 本身就是 Uint8Array 的子类）。 */
+function asPlainUint8Array(buf) {
+  const view = new Uint8Array(buf)
+  assert.equal(Buffer.isBuffer(view), false, '前提：这必须是普通 Uint8Array')
+  assert.equal(typeof view.readUInt32LE, 'undefined', '前提：普通 Uint8Array 没有 Buffer 专有方法')
+  return view
+}
+
+/**
+ * 跑一遍 waitFor3d 的**主路径**（全程不联网）：
+ *   GET 任务 → succeeded + content.file_url → 下载 zip → 解包 → store.save 落盘
+ * `zipBody` 由调用方决定是 Buffer 还是普通 Uint8Array —— 这就是唯一变量。
+ */
+async function runWaitFor3dMainPath(zipBody) {
+  const { resolveConfig } = await import('../lib/config.mjs')
+  const saved = []
+  const store = {
+    async save(payload) {
+      saved.push(payload)
+      return {
+        id: `id-${saved.length}`,
+        name: 'mesh.glb',
+        path: '/ws/mesh.glb',
+        relativePath: 'mesh.glb',
+        bytes: payload.bytes.byteLength,
+        previewUrl: 'preview://x',
+        mime: payload.mime,
+      }
+    },
+  }
+  const fetchImpl = async (url) => {
+    // 产物直链：把 zip 原样回给 requestBytes（它会转成普通 Uint8Array）
+    if (String(url).startsWith('https://cdn.example.com/')) {
+      return new Response(zipBody, { status: 200, headers: { 'content-type': 'application/zip' } })
+    }
+    return new Response(
+      JSON.stringify({
+        id: 'cgt-1',
+        status: 'succeeded',
+        content: { file_url: 'https://cdn.example.com/a.zip' },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': 'req-3d' } },
+    )
+  }
+  const result = await waitFor3d(
+    {
+      config: resolveConfig(undefined),
+      creds: { require: async () => 'k' },
+      taskId: 'cgt-1',
+      store,
+      prompt: 'cube',
+    },
+    { fetchImpl, pollIntervalMs: 1, timeoutMs: 5_000 },
+  )
+  return { result, saved }
+}
+
+test('P0 回归：parseZipEntries / extractModelFromZip 必须接受普通 Uint8Array', () => {
+  const glb = makeGlb()
+  for (const method of [8, 0]) {
+    const zip = makeZip([{ name: 'pbr/mesh_textured_pbr.glb', data: glb }], method)
+    const view = asPlainUint8Array(zip)
+
+    const entries = parseZipEntries(view)
+    assert.equal(entries.length, 1, `method=${method}`)
+    assert.equal(entries[0].name, 'pbr/mesh_textured_pbr.glb', `method=${method}`)
+    assert.equal(entries[0].uncompSize, glb.length, `method=${method}`)
+    assert.ok(entries[0].dataStart > 0, `method=${method}`)
+
+    const r = extractModelFromZip(view)
+    assert.equal(r.name, 'mesh_textured_pbr.glb', `method=${method}`)
+    assert.deepEqual(r.bytes, glb, `method=${method}：解出的字节必须与原始完全一致`)
+
+    // 同一份输入以 Buffer 传入，结果必须完全一致（修复不得破坏原有 Buffer 路径）
+    const viaBuffer = extractModelFromZip(Buffer.from(zip))
+    assert.equal(viaBuffer.name, r.name, `method=${method}`)
+    assert.deepEqual(viaBuffer.bytes, r.bytes, `method=${method}`)
+  }
+})
+
+test('P0 回归：unwrapModelPayload 必须接受普通 Uint8Array，且交付 Buffer 字节', () => {
+  const glb = makeGlb()
+  const zip = makeZip([{ name: 'pbr/mesh_textured_pbr.glb', data: glb }])
+
+  const cases = [
+    ['Uint8Array', unwrapModelPayload(asPlainUint8Array(zip), 'https://x/a.zip')],
+    ['Buffer', unwrapModelPayload(Buffer.from(zip), 'https://x/a.zip')],
+  ]
+  for (const [label, r] of cases) {
+    assert.equal(r.fromArchive, true, label)
+    assert.equal(r.ext, 'glb', label)
+    assert.equal(r.entryName, 'mesh_textured_pbr.glb', label)
+    assert.deepEqual(r.bytes, glb, label)
+    assert.ok(Buffer.isBuffer(r.bytes), `${label}：落盘前的字节应归一成 Buffer`)
+  }
+
+  // 非 ZIP（直接给模型）的 Uint8Array 也要能识别，不能只修 zip 分支
+  const direct = unwrapModelPayload(asPlainUint8Array(glb))
+  assert.equal(direct.fromArchive, false)
+  assert.equal(direct.ext, 'glb')
+  assert.ok(Buffer.isBuffer(direct.bytes))
+
+  // 报错路径也用了 subarray().toString('hex')：Uint8Array 上会退化成 "1,2,3..."，
+  // 所以这里同时钉住错误码与"头 8 字节"的可读渲染
+  assert.throws(
+    () => unwrapModelPayload(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), 'https://x/junk.bin'),
+    (err) => err.code === ARK_ERROR_CODES.BAD_RESPONSE && /头 8 字节 0102030405060708/.test(err.message),
+  )
+})
+
+test('P0 回归：waitFor3d 主路径 —— zip 以普通 Uint8Array 到达时模型必须落盘、warnings 必须为空', async () => {
+  const glb = makeGlb()
+  const zip = makeZip([{ name: 'pbr/mesh_textured_pbr.glb', data: glb }])
+  const view = asPlainUint8Array(zip)
+
+  const { result, saved } = await runWaitFor3dMainPath(view)
+
+  // 这条断言就是当初漏掉的：解析抛的 TypeError 被 save3dModel 吞进 warnings，
+  // 于是"任务成功、模型没交付"却看不出失败。
+  assert.deepEqual(
+    result.warnings,
+    [],
+    'Uint8Array 输入不得产生任何 warning（解析异常会被吞掉，必须断言为空）',
+  )
+  assert.equal(result.models.length, 1, '必须交付 1 个模型')
+  assert.equal(result.timedOut, false)
+  assert.equal(result.status, 'succeeded')
+
+  assert.equal(saved.length, 1, 'store.save 必须被真正调用')
+  assert.equal(saved[0].ext, 'glb')
+  assert.equal(saved[0].mime, 'model/gltf-binary')
+  assert.equal(saved[0].hint, 'cube')
+  assert.ok(Buffer.isBuffer(saved[0].bytes), '落盘的字节应是 Buffer')
+  assert.deepEqual(saved[0].bytes, glb, '落盘字节必须与 ZIP 内的 GLB 完全一致')
+
+  assert.equal(result.models[0].fromArchive, true)
+  assert.equal(result.models[0].entryName, 'mesh_textured_pbr.glb')
+  assert.equal(result.models[0].archiveBytes, zip.length)
+})
+
+test('P0 回归对照：同一份 zip 以 Buffer 传入时结果与 Uint8Array 一致', async () => {
+  const glb = makeGlb()
+  const zip = makeZip([{ name: 'pbr/mesh_textured_pbr.glb', data: glb }])
+
+  const viaU8 = await runWaitFor3dMainPath(asPlainUint8Array(zip))
+  const viaBuffer = await runWaitFor3dMainPath(Buffer.from(zip))
+
+  for (const [label, run] of [['Uint8Array', viaU8], ['Buffer', viaBuffer]]) {
+    assert.deepEqual(run.result.warnings, [], label)
+    assert.equal(run.result.models.length, 1, label)
+    assert.deepEqual(run.saved[0].bytes, glb, label)
+    assert.equal(run.saved[0].ext, 'glb', label)
+  }
+  assert.deepEqual(viaU8.saved[0].bytes, viaBuffer.saved[0].bytes, '两种输入类型的交付字节必须一致')
+})
+
+test('save3dModel：下载/解析失败只记 warnings 不上抛（这就是当初吞掉 TypeError 的机制）', async () => {
+  const { resolveConfig } = await import('../lib/config.mjs')
+  const store = {
+    async save() {
+      throw new Error('不该被调用：下载都没成功')
+    },
+  }
+  const r = await save3dModel({
+    input: { config: resolveConfig(undefined), store },
+    modelUrls: ['https://cdn.example.com/a.zip'],
+    opts: { fetchImpl: async () => new Response('boom', { status: 500 }) },
+    hint: 'x',
+  })
+  assert.deepEqual(r.models, [])
+  assert.equal(r.warnings.length, 1)
+  assert.match(r.warnings[0], /产物下载或解析失败/)
 })
