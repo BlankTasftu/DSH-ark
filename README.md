@@ -293,6 +293,7 @@ node scripts/transcribe.mjs --audio ark-output/xxx.mp3
 - [`docs/VERIFICATION-REPORT.md`](docs/VERIFICATION-REPORT.md) —— 独立验证报告（对抗式审查，含未覆盖范围）
 - [`docs/AUDIT-SUMMARY.md`](docs/AUDIT-SUMMARY.md) —— 安全审计结论文摘要（密钥泄露 / 隐私 / 安全 / 无用代码）
 - [`docs/AUDIT-INDEPENDENT.md`](docs/AUDIT-INDEPENDENT.md) —— 独立对抗式安全审计
+- [`docs/RUNTIME-BOUNDARY.md`](docs/RUNTIME-BOUNDARY.md) —— 运行边界：只以插件运行、不修改 DSH（含证据）
 
 ---
 

@@ -40,6 +40,35 @@ type CallOptions = {
 
 ---
 
+## `lib/path-safety.mjs` — 路径边界判定（共享）
+
+```js
+/** target 是否落在 root 之内（含 root 自身）。注意必须判 '..' 或 '..'+sep， */
+/** 不能只判 startsWith('..')，否则 '..foo' 这种合法名字会被误拒。 */
+export function isInside(root: string, target: string): boolean
+
+/** 断言 target 落在 root 之内，否则抛 ArkError(INVALID_PARAMETER)。 */
+/** 两层判定：① 词法（resolve 后逐段比较）② 真实路径（对最深已存在祖先取 realpath）。 */
+export async function assertInsideWorkspace(input: {
+  root: string, target: string, label?: string,
+}): Promise<string>   // 返回 target 的绝对路径
+```
+
+**为什么单独成一个模块**：这条判定在本插件里有四处需要（图像参考图、视频素材、
+音频转写输入、**产物落盘**）。前三处各自内联过一份，而落盘那处**漏了** ——
+于是 `config.output.dir` 配成 `../../x` 或绝对路径时产物会写到工作区外。
+抽成共享模块就是为了让"漏一处"在结构上不容易再发生。
+
+**两层缺一不可**：只做词法挡不住工作区内的 junction / 符号链接（链接路径字面上在
+工作区内，目标在界外）；只做 realpath 又对"尚未创建的目录"无从下手
+（产物目录按设计就是首次落盘时才创建）—— 所以第二层判的是
+"最深已存在祖先的真实路径 + 尚未创建的相对尾巴"。
+
+使用者：`lib/artifacts.mjs` 的 `ArtifactStore.resolveOutputDir()`。
+回归测试：`tests/artifact-boundary.test.mjs`。
+
+---
+
 ## `lib/ark-image.mjs` — 图像生成
 
 ```js

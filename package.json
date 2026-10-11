@@ -1,7 +1,8 @@
 {
   "name": "dsh-ark",
   "version": "0.1.0",
-  "description": "火山方舟（Volcengine Ark）能力插件：Seedream 图像生成、Seedance 视频生成，以及豆包语音（合成 / 识别 / SeedAudio 音频生成），由模型直接调用。",
+  "private": true,
+  "description": "火山方舟（Volcengine Ark）能力插件：Seedream 图像资产生成、Seedance 视频生成，以及豆包语音（合成 / 识别 / SeedAudio 音频生成），由模型直接调用。",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -10,9 +11,9 @@
     "ark",
     "seedream",
     "seedance",
-    "seed-audio",
     "tts",
-    "asr"
+    "asr",
+    "ocr"
   ],
   "type": "module",
   "main": "lib/index.js",
@@ -32,14 +33,6 @@
     "README.md",
     "docs"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/BlankTasftu/DSH-ark.git"
-  },
-  "bugs": {
-    "url": "https://github.com/BlankTasftu/DSH-ark/issues"
-  },
-  "homepage": "https://github.com/BlankTasftu/DSH-ark#readme",
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

@@ -46,6 +46,8 @@ const REQUIRED_TEXT = {
   'volc-tts.mjs': ['结束标记'],
   'volc-asr.mjs': ['语音识别'],
   'volc-audio.mjs': ['音频生成'],
+  // 落盘边界的报错文案是用户唯一能看到的提示，被编码破坏就失去可操作性
+  'path-safety.mjs': ['必须位于工作区内', '符号链接'],
 }
 
 test('lib/*.js(mjs) 不含 mojibake 特征字符（编码事故回归）', async () => {
