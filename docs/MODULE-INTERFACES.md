@@ -69,6 +69,76 @@ export async function assertInsideWorkspace(input: {
 
 ---
 
+## `lib/ark-3d.mjs` — 图生 3D（Seed3D）
+
+```js
+export const DEFAULT_3D_MODEL: string           // doubao-seed3d-2-0-260328（实测可提交）
+export const MIME_BY_MODEL_EXT: Record<string, string>
+
+/** 解析 ZIP 中央目录（手工实现，零依赖）。支持 stored(0) / deflate(8)；ZIP64 明确报错。 */
+export function parseZipEntries(buf: Buffer): Array<{
+  name: string, method: number, compSize: number, uncompSize: number, dataStart: number,
+}>
+
+/** 从 ZIP 里取模型文件（优先 glb/gltf/obj/…，跳过目录项），校验大小一致性。 */
+export function extractModelFromZip(buf: Buffer): { name: string, bytes: Buffer }
+
+/** 按**内容**归一化上游产物：ZIP → 解包；模型 → 校验魔数。返回真正该落盘的字节。 */
+export function unwrapModelPayload(buf: Buffer, url?: string): {
+  bytes: Buffer, ext: string, fromArchive: boolean, entryName?: string,
+}
+
+/** 收集产物 URL（实测形态 content.file_url，兼容若干别名）。 */
+export function pickModelUrls(raw: object): string[]
+
+/** 归一化任务状态（兼容字符串与 {phase} 两种形态，与视频一致）。 */
+export function normalize3dTask(raw: object): {
+  taskId: string, status: string, modelUrls: string[], failureReason?: any,
+}
+
+/** 组装请求体（纯函数）。image 必填；subdivisionLevel/fileFormat 仅在显式给值时附带。 */
+export function build3dRequestBody(input: {
+  image: string, model?: string, subdivisionLevel?: string, fileFormat?: string,
+}): object
+
+/** 解析输入图引用（本地路径 → data URI；URL/data URI 原样透传）。 */
+/** ⚠️ 内部复用 ark-video.mjs 的 resolveMediaReference —— 那里含着两层路径安全判定。 */
+export async function resolveInputImage(ref: string, cwd: string): Promise<string>
+
+/** 提交 3D 任务（**一次计费动作**，只发一次 POST）。 */
+export async function create3dTask(input: {
+  config: Config, creds: Creds, cwd?: string, image: string,
+  model?: string, subdivisionLevel?: string, fileFormat?: string,
+}, opts?: CallOptions): Promise<{ taskId, status, modelUrls, requestId, raw }>
+
+/** 查询一次 3D 任务。 */
+export async function get3dTask(input: {
+  config: Config, creds: Creds, taskId: string,
+}, opts?: CallOptions): Promise<{ taskId, status, modelUrls, requestId, raw }>
+
+/** 下载 + 解包 + 校验 + 落盘。下载失败**不上抛**（taskId 不能丢）。 */
+export async function save3dModel(input: {
+  input: { config: Config, store: ArtifactStore },
+  modelUrls: string[], hint?: string,
+}, opts?: CallOptions): Promise<{ models: SavedArtifact[], warnings: string[] }>
+
+/** 提交并等待完成；opts.once=true 时只查一次（status 语义，绝不重新提交）。 */
+export async function waitFor3d(input: {
+  config: Config, creds: Creds, store: ArtifactStore, taskId: string,
+  cwd?: string, prompt?: string,
+}, opts?: CallOptions & { once?: boolean, pollIntervalMs?: number, timeoutMs?: number }): Promise<{
+  taskId, status, models, warnings, timedOut, failureReason?,
+}>
+```
+
+**为什么 ZIP 解析要手写**：本项目零运行时依赖，且只需读 `zip` 这一种容器。
+引一个归档库只为解一层 zip 不划算，而且会引入新的供应链面。
+
+**为什么必须解包**：上游声明 `fileformat: "glb"` 却返回 `.zip`（实测）。
+把 zip 改名成 `.glb` 交付 = 交付坏文件。详见 `docs/ARK-API-CONTRACT.md` §1.4。
+
+---
+
 ## `lib/ark-image.mjs` — 图像生成
 
 ```js

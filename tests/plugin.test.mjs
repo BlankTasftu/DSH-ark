@@ -22,12 +22,13 @@ function bootHost(pluginConfig = {}, services = {}, builtins = ['tools']) {
   return host
 }
 
-test('插件注册了全部 6 个工具，且名字稳定', () => {
+test('插件注册了全部 7 个工具，且名字稳定', () => {
   const host = bootHost()
   assert.deepEqual(
     [...host.tools.keys()].sort(),
     [
       'ark_credential_status',
+      'ark_generate_3d',
       'ark_generate_audio',
       'ark_generate_image',
       'ark_generate_video',
@@ -104,6 +105,38 @@ test('视频 action=status 缺少 taskId 时给出明确提示', async () => {
   assert.match(out, /taskId/)
 })
 
+test('3D 工具：description 写明按次计费/耗时/ZIP 解包，且 status 缺 taskId 有提示', async () => {
+  const host = bootHost()
+  const tool = host.tools.get('ark_generate_3d')
+  // 描述承载的是"模型据此决策"的信息，丢了会让模型以为可以随便重试
+  assert.match(tool.description, /按次计费/)
+  assert.match(tool.description, /taskId/)
+  assert.match(tool.description, /ZIP/, '必须提示上游以 ZIP 返回，否则模型会以为拿到的是 glb')
+  assert.equal(tool.isConcurrencySafe, false, '计费类工具不得并发安全')
+
+  const out = await tool.execute({ action: 'status' }, createExec())
+  assert.equal(typeof out, 'string')
+  assert.match(out, /taskId/)
+})
+
+test('3D 工具：submit 缺 image 时拒绝，不发计费提交', async () => {
+  const host = bootHost()
+  const out = await host.tools.get('ark_generate_3d').execute({ action: 'submit' }, createExec())
+  assert.equal(typeof out, 'string')
+  assert.match(out, /image/)
+  assert.match(out, /不会产生新费用/)
+})
+
+test('3D 工具：参数表覆盖 image/action/taskId/wait/model 等关键项', () => {
+  const host = bootHost()
+  const p = host.tools.get('ark_generate_3d').parameters
+  for (const key of ['image', 'action', 'taskId', 'wait', 'model', 'subdivisionLevel', 'fileFormat']) {
+    assert.ok(p[key], `缺少参数 ${key}`)
+  }
+  // 与视频同理：prompt/image 不能标 schema 级 required，否则 status 查询会被挡在门外
+  assert.equal(p.image.required, undefined)
+})
+
 test('每个工具的 execute 返回值都满足自己的 output.schema（真实运行时校验）', async () => {
   // 这是曾经真实炸过的契约：execute 返回了内容块数组，而 schema 声明是 string，
   // 真实 GUI 报 `tool "ark_generate_image" returned invalid output: "value" must be a string`。
@@ -117,6 +150,7 @@ test('每个工具的 execute 返回值都满足自己的 output.schema（真实
     ['ark_speak', { text: 'x' }],
     ['ark_transcribe', { audioPath: 'x.wav' }],
     ['ark_generate_video', { prompt: 'x', action: 'status' }],
+    ['ark_generate_3d', { action: 'status' }],
   ]
   for (const [name, args] of calls) {
     const tool = host.tools.get(name)
@@ -207,7 +241,7 @@ test('webServer 缺失时安静跳过路由注册，不影响工具注册', () =
   // 只给 tools：插件必须不报错、不注册路由。
   const host = bootHost()
   assert.equal(host.routes.length, 0)
-  assert.equal(host.tools.size, 6)
+  assert.equal(host.tools.size, 7)
 
   // 给齐 webServer：路由才出现。
   const withWeb = createHost({
@@ -216,7 +250,7 @@ test('webServer 缺失时安静跳过路由注册，不影响工具注册', () =
     builtins: ['tools', 'webServer'],
   })
   plugin.apply(withWeb.root, {})
-  assert.equal(withWeb.tools.size, 6)
+  assert.equal(withWeb.tools.size, 7)
   assert.ok(
     withWeb.routes.some((r) => r.path === '/dsh-ark/asset'),
     '提供 webServer 后应注册产物预览路由',
@@ -370,7 +404,7 @@ test('往返一致性：产物 previewUrl 必须能被已注册的路由命中�
 
 test('卸载：webServer 路由被注销；工具注册的 disposer 交给 fiber 作用域', () => {
   const host = bootHost()
-  assert.equal(host.tools.size, 6)
+  assert.equal(host.tools.size, 7)
   host.disposeAll()
   // 工具的注销由 DSH fiber 作用域负责（register 返回的 disposer 随作用域回收），
   // 插件只需保证自己注册的 effect 在卸载时释放干净：路由必须被摘掉。

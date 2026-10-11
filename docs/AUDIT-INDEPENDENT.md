@@ -3,9 +3,9 @@
 > 审计者：teammate `verifier`（独立于实现者）
 > 任务：`task-4`「独立验证：dsh-ark 的密钥泄露、隐私与安全漏洞（对抗式）」
 > 审计时间：2026-10-11 02:11 – 02:35 (Asia/Shanghai)
-> 被测版本：`<工作区>\dsh-ark`，`lib/` 共 11 个文件（含 `client.js` 浏览器半侧）
+> 被测版本：`<工作区>`，`lib/` 共 11 个文件（含 `client.js` 浏览器半侧）
 > 基线：`node --import ./tests/stub-dsh-loader.mjs --test "tests/*.test.mjs"` → **167 tests / 167 pass / 0 fail / 0 skipped**
-> 审计脚本：`<工作区>\_recon\verify\audit-a1..a7*.mjs`（**只读 `lib/**`，未修改任何被测代码**）
+> 审计脚本：`<工作区>`（**只读 `lib/**`，未修改任何被测代码**）
 >
 > **审计版本绑定（重要）**：审计期间实现方仍在并发改动 `lib/`（`errors.mjs` 02:12:34、`ark-video.mjs` 02:13:01、`volc-audio.mjs` 02:13:07）。
 > 为确保结论可追溯，本报告的全部实测绑定到以下内容指纹（`Get-FileHash -Algorithm SHA256` 前 12 位）：
@@ -261,7 +261,7 @@ Owner=<主机名>\1121
   <主机名>\1121 Allow FullControl
 ```
 
-**未读取文件内容**（遵守任务约束）。仓库根 `<工作区>\.gitignore` 实测覆盖：
+**未读取文件内容**（遵守任务约束）。仓库根 `<工作区>` 实测覆盖：
 
 ```powershell
 > git status --porcelain --ignored
@@ -279,7 +279,7 @@ Owner=<主机名>\1121
 
 - **级别**：P3（潜在密钥泄露 / 掩码缺陷）
 - **位置**：`lib/index.js:684`
-- **复现**：`node <工作区>\_recon\verify\audit-a3-credential-status.mjs`
+- **复现**：`node <工作区>`
 - **实际输出**：
   ```
   边界(2)  → - ARK_API_KEY（图像 / 视频）：环境变量 MN…MN（2 字符）

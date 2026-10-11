@@ -44,7 +44,7 @@ app.asar 内部也搜不到任何插件痕迹：
 
 ```
 ~/.dsh/profiles/desktop/node_modules/dsh-ark
-  → Junction → <工作区>\dsh-ark
+  → Junction → <工作区>
 ```
 
 即：**DSH 把插件当普通 npm 依赖安装**，代码始终留在插件自己那里，从不拷进 DSH。

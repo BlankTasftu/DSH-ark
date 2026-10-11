@@ -123,6 +123,78 @@ prompt 里说清的画幅）。
 > 需要看图/OCR 时直接用宿主模型的多模态能力即可，不必绕道插件。
 > 这里保留本节仅为记录——**如果将来要恢复该能力，端点与字段口径如上所述**。
 
+### 1.4 图生 3D（Seed3D）—— 实测
+
+**与视频共用同一个任务式端点**，只靠 `model` 区分（这是实测结论，不是文档抄来的）：
+
+| 项 | 值 |
+|---|---|
+| 提交 | `POST /contents/generations/tasks` |
+| 查询 | `GET /contents/generations/tasks/{id}` |
+| 模型 | `doubao-seed3d-2-0-260328`（本机实测可提交） |
+| 鉴权 | `Authorization: Bearer <ARK_API_KEY>` |
+
+请求体（实测形态）：
+
+```json
+{
+  "model": "doubao-seed3d-2-0-260328",
+  "content": [{ "type": "image_url", "image_url": { "url": "<http(s) URL 或 data URI>" } }]
+}
+```
+
+响应（成功终态，实测）：
+
+```json
+{
+  "id": "cgt-20261011153209-rx5qf",
+  "status": "succeeded",
+  "content": { "file_url": "https://…/doubao-seed3d-2-0-….zip?X-Tos-…" },
+  "usage": { "completion_tokens": 30000, "total_tokens": 30000 },
+  "subdivisionlevel": "medium",
+  "fileformat": "glb"
+}
+```
+
+#### 三个必须记住的实测结论
+
+1. **图片可以内联为 base64 data URI** —— 实测 555K 字符的 data URI 被直接接受，
+   不需要先传对象存储。（与视频/音频不同：那两者的 data URL 会被 400 拒绝。）
+
+2. **⚠️ `fileformat` 声明与实际交付物不一致**：响应写 `fileformat: "glb"`，
+   但 `file_url` 给的是 **`.zip`**，内部才是 `pbr/mesh_textured_pbr.glb`（deflate 压缩，
+   压缩后 24.0 MB → 解压后 29.9 MB）。
+   因此：
+   - 只信 `fileformat` 把 zip 改名成 `.glb` ⇒ **交付的文件是坏的**
+   - 只按 URL 扩展名交付 `.zip` ⇒ 用户拿到压缩包，不是模型
+   - 正确做法：**按内容判定**（ZIP 魔数 `PK\x03\x04`）→ 解包 → 校验 GLB 魔数 `glTF` →
+     用 glb 落盘。实现见 `lib/ark-3d.mjs` 的 `unwrapModelPayload()`。
+   - GLB 还要校验头部声明的 `totalLength`（偏移 8，uint32 LE）与实际字节数一致，
+     不一致说明产物损坏或解析错误。
+
+3. **耗时长、计费按 token**：实测 07:32:43 提交 → 07:40:14 完成，约 **7.5 分钟**，
+   `completion_tokens: 30000`。必须轮询，不能只查一次。
+
+#### 未验证的范围（不要当成事实）
+
+- **只实测了 glb**。其它 `fileformat`（obj / usdz / fbx 等）的打包与响应形态**未验证**，
+  所以实现对未知容器采取**明确报错**而不是猜着解 —— 猜错就是交付坏文件。
+- `subdivisionlevel`（low/medium/high）与 `fileformat` 的**请求侧**是否被接受未单独验证；
+  实现只在用户显式传值时附带，不主动填，让服务端用默认。
+- ZIP64 未支持：3D 产物在几十 MB 量级，远达不到 4GB 阈值；真遇到会明确报错。
+
+#### 关于「模型开通」的判断（实测纠正）
+
+`GET /api/v3/models` 返回的 135 个模型里：
+
+| 模型 | 列表状态 | 实际可否调用 |
+|---|---|---|
+| `doubao-seedance-2-0-260128` | `-`（空） | ✗ `ModelNotOpen`（未开通） |
+| `doubao-seed3d-2-0-260328` | `-`（空） | ✓ 可提交 |
+
+⇒ **列表里的状态既不能证明可用、也不能证明不可用**，只能实际调一次。
+不要据 `GET /models` 的返回下"账号能用/不能用"的结论（我曾据此误判过一次）。
+
 ---
 
 ## 2. 火山「语音技术」通道（TTS / ASR / 音频生成）
