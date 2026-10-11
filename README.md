@@ -191,9 +191,14 @@ DSH 会在运行时按它重建插件实例）。完整默认值见 [`cordis.pat
       sampleRate: 24000
       maxCharsPerRequest: 200      # 超长文本按标点分句后串行合成
     output:
-      dir: ark-output              # 产物落盘目录（相对当前工作目录）
+      dir: ark-output              # 产物落盘目录。**必须落在工作区内**：绝对路径或 ../ 逃逸会被拒绝
       previewRoute: true           # 注册只读本机预览路由 /dsh-ark/asset?id=…
 ```
+
+> **关于 `output.dir`**：产物是用户数据，为免写到意料之外的位置，落盘前会做两层判定
+> （词法 + 真实路径），越界抛 `INVALID_PARAMETER` 并提示改用相对路径。
+> 这同时挡住了工作区内 junction / 符号链接指向界外的情形。
+> 详见 [`docs/RUNTIME-BOUNDARY.md`](docs/RUNTIME-BOUNDARY.md)。
 
 ---
 
