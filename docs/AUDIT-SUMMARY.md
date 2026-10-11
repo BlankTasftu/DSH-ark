@@ -122,7 +122,7 @@
 ## 5. 复核方式（结论可复现）
 
 ```bash
-cd E:/DeepSeek/插件
+cd <工作区>
 
 # 1. 密钥泄露：内容 + 文件名 + git 全历史 + 备份
 node _recon/audit-secrets.mjs
