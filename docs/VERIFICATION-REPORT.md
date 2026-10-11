@@ -2,8 +2,8 @@
 
 > 验证者：teammate `verifier`（独立于实现者）
 > 验证时间：2026-10-10 23:50 – 2026-10-11 00:10 (Asia/Shanghai)
-> 被测版本：`<工作区>`（无 git 仓库，故以文件内容与时间戳为准）
-> 验证脚本：`<工作区>`（v1–v11，全部只读被测代码；**未修改任何 `lib/**`、`tests/**`、`package.json`、`cordis.patch.yml`**）
+> 被测版本：`E:\DeepSeek\插件\dsh-ark`（无 git 仓库，故以文件内容与时间戳为准）
+> 验证脚本：`E:\DeepSeek\插件\_recon\verify\`（v1–v11，全部只读被测代码；**未修改任何 `lib/**`、`tests/**`、`package.json`、`cordis.patch.yml`**）
 > 本报告为本次验证唯一新增到 `dsh-ark` 内的文件。
 
 ---
@@ -27,7 +27,7 @@
 ## 1. 基线确认
 
 ```
-<工作区> node --import ./tests/stub-dsh-loader.mjs --test "tests/*.test.mjs"
+E:\DeepSeek\插件\dsh-ark> node --import ./tests/stub-dsh-loader.mjs --test "tests/*.test.mjs"
 ℹ tests 123
 ℹ suites 0
 ℹ pass 123
@@ -174,8 +174,8 @@ junction 创建: true
   exact 表按 **pathname** 精确查表 ⇒ `/dsh-ark/asset/<uuid>` ≠ `/dsh-ark/asset`，**不会命中**，落到 fallback owner。
 - **实测（`_recon/verify/v7c-asset-route.mjs`，逐行复刻 `lib/index.js:34/37-75/109-124/406-450`）**：
   ```
-  回传 URL        = /dsh-ark/asset/<uuid>
-  其 pathname     = /dsh-ark/asset/<uuid>
+  回传 URL        = /dsh-ark/asset/ba686401-7a35-40d8-b2b6-0a292fde55c5
+  其 pathname     = /dsh-ark/asset/ba686401-7a35-40d8-b2b6-0a292fde55c5
   路由 exact key  = /dsh-ark/asset
   ** FAIL ** 回传 URL 的 pathname 能命中 exact 路由
   PASS  换成路由真正接受的 ?id= 形态 → 200 且字节一致
@@ -499,7 +499,7 @@ PASS  MODULE-INTERFACES 已如实标注 ASR 未实现
 
 ## 7. 复现指引
 
-所有脚本位于 `<工作区>`（**未放进插件目录，不影响 `dsh-ark` 的包内容**）：
+所有脚本位于 `E:\DeepSeek\插件\_recon\verify\`（**未放进插件目录，不影响 `dsh-ark` 的包内容**）：
 
 | 脚本 | 覆盖内容 |
 |---|---|
@@ -524,14 +524,14 @@ PASS  MODULE-INTERFACES 已如实标注 ASR 未实现
 运行示例：
 
 ```powershell
-cd <工作区>
+cd E:\DeepSeek\插件\dsh-ark
 node --import ./tests/stub-dsh-loader.mjs --test "tests/*.test.mjs"      # 基线 123/123
-node <工作区>                        # 计费安全
-node <工作区>                     # TTS 解析
-node <工作区>                  # 文档一致性
+node E:\DeepSeek\插件\_recon\verify\v5-billing.mjs                        # 计费安全
+node E:\DeepSeek\插件\_recon\verify\v4-tts-stream.mjs                     # TTS 解析
+node E:\DeepSeek\插件\_recon\verify\v10-docs-vs-code.mjs                  # 文档一致性
 ```
 
-> 说明：这些脚本用 `file:///<工作区>` 形式的 URL 直接 import 被测模块（Windows 上 ESM 不接受裸盘符路径），因此**不需要** `stub-dsh-loader`（只有 `tests/*.test.mjs` 因为 import `lib/index.js` 才需要它）。临时沙箱目录为 `<工作区>` 与 `<临时盘路径>`（含 junction，验证后可整体删除）。
+> 说明：这些脚本用 `file:///E:/DeepSeek/%E6%8F%92%E4%BB%B6/dsh-ark/lib/*.mjs` 形式的 URL 直接 import 被测模块（Windows 上 ESM 不接受裸盘符路径），因此**不需要** `stub-dsh-loader`（只有 `tests/*.test.mjs` 因为 import `lib/index.js` 才需要它）。临时沙箱目录为 `E:\DeepSeek\插件\_recon\verify\sandbox*` 与 `E:\_arkverify`（含 junction，验证后可整体删除）。
 
 ---
 
@@ -555,11 +555,11 @@ node <工作区>                  # 文档一致性
 
 > 验证者：teammate `verifier`
 > 时间：2026-10-11 00:10 – 00:15 (Asia/Shanghai)
-> **验证载体：工作区文件本体**（`<工作区>`），**不是**任何重建副本。
-> 唯一的技术处理：`lib/index.js` 依赖 peer 包 `@deepseek-ai/dsh-tools`，因此用**临时 loader 钩子**把该裸说明符指向桩包（桩包与 loader 都在 `<临时盘路径>\`），
+> **验证载体：工作区文件本体**（`E:\DeepSeek\插件\dsh-ark`），**不是**任何重建副本。
+> 唯一的技术处理：`lib/index.js` 依赖 peer 包 `@deepseek-ai/dsh-tools`，因此用**临时 loader 钩子**把该裸说明符指向桩包（桩包与 loader 都在 `E:\_arkverify_live\`），
 > 从而让**工作区的 `lib/index.js` 原件**被直接加载执行。脚本会打印被加载模块的字节数与关键中文串作为指纹：
 > ```
-> 被测模块 = 工作区 <工作区>
+> 被测模块 = 工作区 E:/DeepSeek/插件/dsh-ark/lib/index.js
 >   字节数 = 29783 （与磁盘一致）
 >   含「视频任务仍在渲染」 = true
 > ```
@@ -613,7 +613,7 @@ node --import ./tests/stub-dsh-loader.mjs --test "tests/*.test.mjs"
 
 ```
 === 2. P2-2 往返：工具产出 previewUrl → 真实注册路由 → 取回字节（验证载体=工作区文件） ===
-  工具产出的预览地址 = "/dsh-ark/asset?id=<uuid>"
+  工具产出的预览地址 = "/dsh-ark/asset?id=132622a0-44bd-49b3-8195-1e9fc1594f72"
   PASS  previewUrl 为 ?id= 形态
   PASS  pathname === 注册路由 path
   PASS  路由返回 200
@@ -662,7 +662,7 @@ PASS  Host=[::1]:19387 + 同源 Origin → 404    ← 反向误伤检查
 Lead 主张这三种写法语义上确实指向 `127.0.0.1`，因此走到「未登记 id → 404」而非 403 是正确行为。我用**带真实已登记 id** 的现场复核（`_recon/verify/v19-p27-recheck.mjs`），判据换成「**能否拿到产物内容**」而不是「403 还是 404」：
 
 ```
-已登记产物 id = <uuid>
+已登记产物 id = f98e6a47-dd3e-4500-bd33-b9bb94a7b76a
 
 Host=2130706433        无 Origin → code=200 bytes=70 isPng=true
                        Origin=evil.com → code=403 bytes=0     ✅ 不泄漏

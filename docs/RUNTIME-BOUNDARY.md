@@ -44,7 +44,7 @@ app.asar 内部也搜不到任何插件痕迹：
 
 ```
 ~/.dsh/profiles/desktop/node_modules/dsh-ark
-  → Junction → <工作区>
+  → Junction → E:\DeepSeek\插件\dsh-ark
 ```
 
 即：**DSH 把插件当普通 npm 依赖安装**，代码始终留在插件自己那里，从不拷进 DSH。
@@ -174,7 +174,7 @@ lib/artifacts.mjs  fs.writeFile← ArtifactStore.save
 ## 复现命令
 
 ```bash
-cd <工作区>
+cd E:/DeepSeek/插件
 
 # DSH 本体是否被改动（时间戳 + asar 内容 + 文件指纹）
 node _recon/verify/check-dsh-untouched.mjs

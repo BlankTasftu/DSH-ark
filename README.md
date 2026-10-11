@@ -293,6 +293,7 @@ node scripts/transcribe.mjs --audio ark-output/xxx.mp3
 
 ### 文档
 
+- [`CHANGELOG.md`](CHANGELOG.md) —— **版本记录**（每个版本改了什么；版本号规则见文件开头）
 - [`docs/ARK-API-CONTRACT.md`](docs/ARK-API-CONTRACT.md) —— 已核实的接口契约（含实测证据与踩坑点）
 - [`docs/MODULE-INTERFACES.md`](docs/MODULE-INTERFACES.md) —— 模块接口（冻结）
 - [`docs/VERIFICATION-REPORT.md`](docs/VERIFICATION-REPORT.md) —— 独立验证报告（对抗式审查，含未覆盖范围）
