@@ -80,18 +80,32 @@ profile 自己的 `cordis.patch.yml` 里**没有** dsh-ark 条目，`cordis.yml`
 
 ---
 
-## 4. 代码面：写操作只有一个，且强制落在工作区内
+## 4. 代码面：写操作只有两处，且默认都不写工作区之外
 
-全量扫描 `lib/` 的写操作（`writeFile`/`mkdir`/`unlink`/`rm`/`rename`/`copyFile`/
-`appendFile`/`createWriteStream`/`chmod`）—— 只有两处，同在 `lib/artifacts.mjs`：
+全量扫描 `lib/` 的写操作（`writeFile`/`writeFileSync`/`mkdir`/`unlink`/`rm`/`rename`/
+`copyFile`/`appendFile`/`createWriteStream`/`chmod`）—— 只有两处：
 
 ```
-lib/artifacts.mjs  fs.mkdir    ← ArtifactStore.save
-lib/artifacts.mjs  fs.writeFile← ArtifactStore.save
+lib/artifacts.mjs  fs.mkdir / fs.writeFile   ← ArtifactStore.save（产物落盘）
+lib/index.js       writeFileSync             ← 排障探针（默认关闭）
 ```
 
-落点 = `path.resolve(cwd, config.output.dir)`，`cwd` 取当前会话工作目录，
+**① 产物落盘**：落点 = `path.resolve(cwd, config.output.dir)`，`cwd` 取当前会话工作目录，
 且**经 `assertInsideWorkspace()` 判定必须落在工作区内**（见下一节）。
+
+**② 排障探针**：写 `.apply-probe.json` 到**插件自己的安装目录**（由 `import.meta.url`
+推导）—— 这是唯一一处可能落在工作区**之外**的写入。
+
+> ⚠️ 它曾经是**无条件**执行的。现已改为**显式开启**：只有配置里写
+> `output: { writeProbe: true }` 才会落这个文件。
+>
+> 理由：DSH 的文件沙箱把变更限制在「会话工作区 + 平台临时根目录」，而插件安装目录
+> **不在其中**。探针内容虽只有能力开关与配置键名（**不含凭据**）、失败也被吞掉，
+> 但"平时不该往工作区外写"这条边界应该守住 —— 把"依赖一个默认开启的副作用"
+> 改成"依赖一个明确的选择"。
+>
+> 需要它的时候（排查"改了代码到底生效没有"：宿主侧 ESM 被 Node 缓存，
+> 重载插件不重读文件，只有重启才生效）再打开。
 
 同时确认 `lib/` 内**没有**：
 
@@ -99,6 +113,24 @@ lib/artifacts.mjs  fs.writeFile← ArtifactStore.save
 - `eval` / `new Function`（无动态代码）
 - `process.env.X = …`（不改环境变量）
 - 对 `DeepSeekHarness` / `app.asar` 的任何引用
+
+### 与 DSH 文件沙箱的关系（这不是"沙箱逃逸"，但也不受沙箱约束）
+
+DSH 的 `dsh-fs-sandbox` 是 **`ctx.fs` 服务的后端**：沙箱策略是作为**参数**
+传进服务方法的（`writeText(target, content, expected, signal, sandboxPolicy)`），
+也就是说**它约束的是走 `ctx.fs` 的文件工具**，不是拦截进程内的 `node:fs` 调用。
+
+本插件用的是 `node:fs`。因此准确的表述是：
+
+- **无法通过本插件绕过 DSH 的沙箱去写到工作区之外** —— 因为它**根本没有走沙箱**
+  那条路：产物落点由插件自己的 `assertInsideWorkspace()` 强制在工作区内
+  （词法 + realpath 两层，比 `workspace-write` 更严，与沙箱模式无关）；
+- 但反过来说，**沙箱模式也管不到本插件的写入** —— 这两层是**并行**的，不是叠加的。
+  插件的边界来自它自己的校验，不来自宿主的沙箱。
+
+这个区别很重要：如果哪天有人把 `assertInsideWorkspace()` 改坏，
+**沙箱不会兜住它**。所以那条校验的回归测试（`tests/artifact-boundary.test.mjs`、
+`tests/path-escape.test.mjs`）是真正承重的那一层。
 
 ### 落盘边界：已强制约束在工作区内
 

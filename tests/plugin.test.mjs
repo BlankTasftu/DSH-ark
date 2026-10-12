@@ -558,6 +558,143 @@ test('产物预览路由：拒绝截断型 / 作弊型 Host 与不可验证的 O
   }
 })
 
+/**
+ * ⚠️ 回归：**沙箱 iframe 里的预览**（`Origin: null`）。
+ *
+ * 真实反馈："在沙箱模式下预览图无法正常预览"。成因：沙箱 iframe
+ * （`<iframe sandbox>` 未加 `allow-same-origin`）发出的请求带 `Origin: null`，
+ * 而本路由对 `Origin: null` 一律 403 —— **安全加固挡掉了合法用法**。
+ *
+ * 难点在于 `Origin: null` **不能孤立判断**：本地 `file://` / `data:` 页面发的也是它。
+ * 所以修法不是"放行 null"，而是：
+ *   · 默认**继续拒绝**（fail-closed，安全姿态不变）；
+ *   · 显式打开 `output.allowSandboxedPreview` 后，才接受**带浏览器生成的
+ *     `Sec-Fetch-*`** 的 `Origin: null`（`same-origin`/`same-site` + 有 mode）。
+ *
+ * 这条测试同时钉住**两件相反的事**：打开开关确实能放行沙箱 iframe，
+ * 且打开后**其余防线一条都没松**。
+ */
+test('⚠️ 沙箱 iframe 预览：默认拒绝 Origin:null；显式开启后只放行「同源 + 浏览器 Sec-Fetch」', async () => {
+  /** 起一个宿主并把路由的 handler 取出来。 */
+  async function routeWith(config) {
+    const registered = []
+    const host = createHost({
+      config,
+      services: { webServer: { register: (r) => (registered.push(r), () => {}) } },
+      builtins: ['tools', 'webServer'],
+    })
+    plugin.apply(host.root, config)
+    const route = registered.find((r) => r.path === '/dsh-ark/asset')
+    assert.ok(route, '未注册产物预览路由')
+    return async (headers) => {
+      const res = { statusCode: 200, end() {} }
+      await route.handler({ url: '/dsh-ark/asset?id=x', method: 'GET', headers, on() {} }, res)
+      return res.statusCode
+    }
+  }
+
+  /** 沙箱 iframe 在**同源页面**里的典型头部（这些 Sec-Fetch 由浏览器生成，JS 不可伪造）。 */
+  const sandboxedSameOrigin = {
+    host: '127.0.0.1:19387',
+    origin: 'null',
+    'sec-fetch-site': 'same-origin',
+    'sec-fetch-mode': 'no-cors',
+  }
+
+  // ① 默认配置：一律拒（与既有行为一致，安全姿态不变）
+  const callDefault = await routeWith({})
+  assert.equal(
+    await callDefault(sandboxedSameOrigin),
+    403,
+    '默认必须拒绝 Origin:null —— file:// 页面发的也是 null，无法区分',
+  )
+
+  // ② 显式开启：同源沙箱 iframe 放行到"未找到产物"的 404，证明校验通过
+  const callOpen = await routeWith({ output: { allowSandboxedPreview: true } })
+  assert.equal(
+    await callOpen(sandboxedSameOrigin),
+    404,
+    '开启后同源沙箱 iframe 应当放行（走到 404 = 校验通过、只是没这个产物）',
+  )
+  assert.equal(
+    await callOpen({ ...sandboxedSameOrigin, 'sec-fetch-site': 'same-site' }),
+    404,
+    'same-site 也应当放行',
+  )
+
+  // ③ 开启后**其余防线一条都没松** —— 这是本节最重要的断言
+  const mustStillReject = [
+    ['file:// / data: 页面（cross-site）', { ...sandboxedSameOrigin, 'sec-fetch-site': 'cross-site' }],
+    ['缺少 Sec-Fetch-Site（非浏览器客户端自造 Origin）', { ...sandboxedSameOrigin, 'sec-fetch-site': undefined }],
+    ['缺少 Sec-Fetch-Mode（同上）', { ...sandboxedSameOrigin, 'sec-fetch-mode': undefined }],
+    ['非回环 Host', { ...sandboxedSameOrigin, host: 'evil.example.com' }],
+    ['跨站 Origin（同源检查仍生效）', { ...sandboxedSameOrigin, origin: 'http://evil.example.com' }],
+    ['Host 被截断', { ...sandboxedSameOrigin, host: '127.0.0.1#evil.com' }],
+  ]
+  for (const [label, headers] of mustStillReject) {
+    const clean = Object.fromEntries(Object.entries(headers).filter(([, v]) => v !== undefined))
+    assert.equal(await callOpen(clean), 403, `开启沙箱预览后仍必须拒绝：${label}`)
+  }
+})
+
+/**
+ * ⚠️ 回归（工作区外写入）：默认**不得**往工作区之外写任何东西。
+ *
+ * 插件的排障探针写的是**插件自己的安装目录**（`import.meta.url` 推导），
+ * 那是本插件唯一一处工作区外的写入。而 DSH 的文件沙箱把变更限制在
+ * "会话工作区 + 临时根目录"，插件安装目录不在其中 —— 虽然探针内容
+ * 不含凭据、写入失败也被吞掉，但"平时不该往工作区外写"这条要守住。
+ *
+ * 所以它改为显式开启（`output.writeProbe`）。这条测试用**文件 mtime**
+ * 判断"这次 apply 到底写了没有"，而不是只看文件存在与否
+ * （文件可能是上一次留下的）。
+ */
+test('⚠️ 默认不往工作区外写：排障探针只在显式开启时才落盘', async () => {
+  const fs = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const probePath = fileURLToPath(new URL('../.apply-probe.json', import.meta.url))
+
+  const mtimeOf = () => {
+    try {
+      return fs.statSync(probePath).mtimeMs
+    } catch {
+      return null
+    }
+  }
+
+  // ① 默认配置：apply 不得写探针
+  const before = mtimeOf()
+  const hostDefault = bootHost()
+  assert.ok(hostDefault.tools.get('ark_generate_image'), '默认配置下工具应正常注册（门控没被探针影响）')
+  assert.equal(
+    mtimeOf(),
+    before,
+    '默认配置下 apply 不得写工作区外的探针文件（mtime 不应变化）',
+  )
+
+  // ② 显式开启：应当写，且内容可解析
+  const hostProbe = bootHost({ output: { writeProbe: true } })
+  assert.ok(hostProbe.tools.get('ark_generate_image'))
+  const after = mtimeOf()
+  assert.ok(after !== null, '显式开启后应当写出探针文件')
+  assert.notEqual(after, before, '显式开启后 mtime 应当变化（证明这次真的写了）')
+
+  const parsed = JSON.parse(fs.readFileSync(probePath, 'utf8'))
+  // `reason` 可能是 `apply` 或 `rebuild` —— 工具注册完成后会触发一次重建，
+  // 所以最后落盘的那次通常是 `rebuild`。断言"是这两者之一"而不是某一种，
+  // 否则测试会依赖内部触发顺序（那种脆弱断言会在无关改动时误报）。
+  assert.ok(
+    parsed.reason === 'apply' || parsed.reason === 'rebuild',
+    `探针应记录触发时机（apply/rebuild），实际 ${JSON.stringify(parsed.reason)}`,
+  )
+  // 探针**不含凭据**：这是它可以被允许写出的前提之一。
+  const text = fs.readFileSync(probePath, 'utf8')
+  assert.equal(/api[-_]?key|bearer|secret|token/i.test(text), false, '探针内容不得含凭据相关字样')
+
+  // 收尾：把测试写出的探针删掉，不留在工作区里
+  fs.rmSync(probePath, { force: true })
+})
+
 test('往返一致性：产物 previewUrl 必须能被已注册的路由命中（曾出现 404 的真实缺陷）', async () => {
   const os = await import('node:os')
   const fs = await import('node:fs/promises')
