@@ -51,7 +51,7 @@ function loadRenderers() {
 /** 取"预览地址"那一行的下标（没有则 -1）。 */
 const previewIdx = (text) => text.split('\n').findIndex((l) => /^预览地址（仅本机可访问）：/.test(l))
 
-test('⚠️ 回归：renderVideoStatus 的预览行在最后，之后不得有任何内容行', () => {
+test('⚠️ 回归：renderVideoStatus 的预览地址必须是**最后一行**（卡片才渲染得出来）', () => {
   const { renderVideoStatus } = loadRenderers()
   const out = renderVideoStatus({
     taskId: 't-1',
@@ -59,19 +59,23 @@ test('⚠️ 回归：renderVideoStatus 的预览行在最后，之后不得有�
     videos: [{ relativePath: 'ark-output/a.mp4', bytes: 2048, previewUrl: '/dsh-ark/asset?id=aaa' }],
   })
 
+  const lines = out.split('\n').filter((l) => l.trim() !== '')
   const idx = previewIdx(out)
   assert.ok(idx >= 0, `视频输出必须有预览地址行，实际：\n${out}`)
-  // 关键断言：预览行之后**只剩**交付提醒（它同一段内，不占独立内容行）。
-  const after = out.split('\n').slice(idx + 1).filter((l) => l.trim() !== '')
+  // ⚠️ 关键：地址行之后**一行都不能有**。曾经把交付提醒放在它后面，
+  // 结果预览地址不再是最后一行 —— 用户的预览图**直接不显示了**。
   assert.equal(
-    after.length,
-    1,
-    `预览行之后只允许有交付提醒，实际还有 ${after.length} 行：${JSON.stringify(after)}`,
+    lines.at(-1),
+    lines[idx],
+    `预览地址必须是最后一行（之后不得有内容），实际最后一行：${JSON.stringify(lines.at(-1))}`,
   )
-  assert.match(after[0], /present/, `预览行之后那一行应当是交付提醒，实际：${JSON.stringify(after[0])}`)
+  // 提醒仍然要在（只是移到地址**之前**）
+  const remindIdx = lines.findIndex((l) => /present/.test(l))
+  assert.ok(remindIdx >= 0, '交付提醒不能丢')
+  assert.ok(remindIdx < idx, `交付提醒必须排在预览地址之前：remind@${remindIdx} preview@${idx}`)
 })
 
-test('⚠️ 回归：render3dStatus 的预览行在 warnings 之后、且没有尾随内容', () => {
+test('⚠️ 回归：render3dStatus 的地址在 warnings 之后、且是最后一行', () => {
   const { render3dStatus } = loadRenderers()
   const out = render3dStatus({
     taskId: 't-2',
@@ -80,15 +84,13 @@ test('⚠️ 回归：render3dStatus 的预览行在 warnings 之后、且没有
     warnings: ['⚠️ 某个非致命问题'],
   })
 
-  const lines = out.split('\n')
+  const lines = out.split('\n').filter((l) => l.trim() !== '')
   const idx = previewIdx(out)
   const warnIdx = lines.findIndex((l) => l.includes('某个非致命问题'))
   assert.ok(idx >= 0, `3D 输出必须有预览地址行，实际：\n${out}`)
   assert.ok(warnIdx >= 0, '本用例应当带上 warning')
-  assert.ok(warnIdx < idx, `warnings 必须排在预览行之前（否则把卡片顶上去）：warn@${warnIdx} preview@${idx}`)
-
-  const after = lines.slice(idx + 1).filter((l) => l.trim() !== '')
-  assert.equal(after.length, 1, `预览行之后只允许有交付提醒，实际：${JSON.stringify(after)}`)
+  assert.ok(warnIdx < idx, `warnings 必须排在预览地址之前（否则把卡片顶上去）：warn@${warnIdx} preview@${idx}`)
+  assert.equal(lines.at(-1), lines[idx], '预览地址必须是最后一行')
 })
 
 test('⚠️ 回归：产物缺 previewUrl 时，输出仍干净**且交付提醒不能跟着消失**', () => {
@@ -111,11 +113,21 @@ test('⚠️ 回归：产物缺 previewUrl 时，输出仍干净**且交付提�
     // ⚠️ 独立审查发现的耦合：曾经"没有地址"会把**交付提醒也一起删掉**，
     // 于是模型手上一条提示都没有。提醒必须独立于地址存在。
     assert.match(out, /present/, `${label}：没有预览地址时，交付提醒不能跟着消失`)
-    // 而且这时**不能**再说"预览地址已在上方" —— 那句话会是假的。
+    // 而且这时**不能**声明有预览地址 —— 那会是假话。
+    //
+    // ⚠️ 判据必须落在**代码里可能出现的措辞**上。这里曾经写
+    // `!out.includes('预览地址已在上方')`，而那句话在实现里**已经不存在了** ——
+    // 于是断言恒为真、永远不可能失败，是又一个**死断言**（本项目已栽过两次）。
+    // 改成检查"任何声称有预览地址的措辞"，这样实现若哪天又去提地址就会红。
     assert.equal(
-      out.includes('预览地址已在上方'),
+      /预览地址[^\n]*[（(]仅本机可访问[）)]/.test(out),
       false,
-      `${label}：没有地址时不得声称"预览地址已在上方"（会指向不存在的东西）`,
+      `${label}：没有地址时不得声称有预览地址（会指向不存在的东西）`,
+    )
+    assert.equal(
+      /地址(已)?在上方|见上方地址|上面的预览/.test(out),
+      false,
+      `${label}：没有地址时不得用"地址在上方"这类指代`,
     )
   }
 })
@@ -149,11 +161,13 @@ test('⚠️ 回归：守卫能抓到"预览行之后追加一行"的变异（�
     status: 'succeeded',
     videos: [{ relativePath: 'a.mp4', bytes: 1024, previewUrl: '/dsh-ark/asset?id=ccc' }],
   })
+  const lines = out.split('\n').filter((l) => l.trim() !== '')
   const idx = previewIdx(out)
-  const after = out.split('\n').slice(idx + 1).filter((l) => l.trim() !== '')
-  assert.ok(
-    after.length > 1,
-    '变异版应当在预览行之后多出内容 —— 如果这里没多，说明本文件的守卫写法已经失效，必须改写法',
+  // 变异版里预览地址**不再是最后一行** —— 上面那两条断言正是这样写的，所以它们会红。
+  assert.notEqual(
+    lines.at(-1),
+    lines[idx],
+    '变异版应当让预览地址不再是最后一行 —— 否则上面两条断言的写法已经失效，必须改写法',
   )
-  assert.ok(after.some((l) => l.includes('MUTANT-TRAILING-LINE')), '变异标记应当可见')
+  assert.ok(lines.at(-1).includes('MUTANT-TRAILING-LINE'), '变异标记应当出现在末尾')
 })
