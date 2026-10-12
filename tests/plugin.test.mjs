@@ -143,13 +143,16 @@ test('工具描述里写明了计费与异步语义（模型据此决策，不�
  */
 test('⚠️ 回归：产出文件的工具，描述里必须含交付指令', () => {
   const host = bootHost()
+  // ⚠️ 只列**真正落盘产物**的 5 个工具。
+  // `ark_transcribe` **不在此列**：它只把音频转成文本返回，没有产物文件、也没有预览地址，
+  // 给它写"两张卡片都要"属于措辞不准（会诱导模型交付一个不存在的东西）。
+  // 这条最初把它算进来了，是分类错误 —— 由 preview-last-line 那条测试的反向断言纠住。
   const producing = [
     'ark_generate_image',
     'ark_generate_video',
     'ark_generate_3d',
     'ark_speak',
     'ark_generate_audio',
-    'ark_transcribe',
   ]
   for (const name of producing) {
     const tool = host.tools.get(name)
@@ -159,17 +162,38 @@ test('⚠️ 回归：产出文件的工具，描述里必须含交付指令', (
       /交付/,
       `${name} 的描述必须写明"产出后要把文件交付给用户" —— 否则调用方只贴路径，用户拿不到文件`,
     )
-    // "只贴路径不算交付"这半句是关键：否则调用方会以为给了路径就够了。
+    // "只给路径不够"这半句是关键：否则调用方会以为给了路径就够了。
     assert.match(tool.description, /不算交付|绝对路径/, `${name} 的描述要说清"只给路径不够"`)
   }
 
   // 反向：不产出文件的工具不该被塞这句（避免文案膨胀、也避免误导）。
-  const status = host.tools.get('ark_credential_status')
-  assert.equal(
-    /【交付要求】/.test(status.description),
-    false,
-    'ark_credential_status 不产出文件，不该带交付指令',
-  )
+  //
+  // ⚠️ 断言方式很关键（这是独立审查抓到的**假绿**）：
+  // 原来写的是 `d.includes('【交付要求')` —— 那只是在测一个**字面前缀**，
+  // 只能抓住恰好以 `【交付要求】` 开头的那种文案。把真实的 v0.3.1 指令
+  // （它以 `【交付要求】` 开头）注入 `ark_credential_status` 时，
+  // 原断言**照样通过**（30/30 全绿），也就是它根本没在守这件事。
+  //
+  // 正确做法：直接拿**指令常量的可识别片段**来判 —— 只要那句指令出现在
+  // 不该出现的地方，无论前缀怎么写都能抓到。
+  for (const name of ['ark_credential_status', 'ark_transcribe']) {
+    const d = host.tools.get(name).description
+    assert.equal(
+      d.includes('两张卡片都要'),
+      false,
+      `${name} 不产出文件，不该带交付指令（会诱导模型去交付不存在的东西）`,
+    )
+    assert.equal(
+      d.includes('登记为交付物'),
+      false,
+      `${name} 不产出文件，描述里不该出现"登记为交付物"`,
+    )
+    // ⚠️ 不要再写 `includes('只贴一行路径')` 这类**当前指令里已经没有**的措辞：
+    // 那种断言恒为真、永远不可能失败，是另一种假绿。
+    // 判据必须落在**指令里确实存在**的短语上（上面两条），
+    // 或者干脆直接比对常量本身（见 tests/preview-last-line.test.mjs 里对
+    // "产出文件的工具必须含这两句" 的正向断言）。
+  }
 })
 
 test('写操作工具标记为不可并发，读操作标记为可并发，生成/识别类标记为不可并发', () => {

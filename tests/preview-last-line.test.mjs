@@ -23,7 +23,6 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { createCredentialResolver } from '../lib/config.mjs'
 import { createExec, createHost, createFetchStub } from './host-harness.mjs'
 import plugin from '../lib/index.js'
 
@@ -142,14 +141,28 @@ test('⚠️ 回归：工具描述必须明确"两张卡片都要"，并驳回"�
     'ark_generate_3d',
     'ark_speak',
     'ark_generate_audio',
-    'ark_transcribe',
   ]
   for (const name of producing) {
     const d = host.tools.get(name).description
-    assert.match(d, /两张卡片都要|都要/, `${name}：必须说明两张卡片都要`)
-    assert.match(d, /不能替代|不算交付|不要因为/, `${name}：必须明说"预览不能替代交付"`)
-    assert.match(d, /present/, `${name}：要给出具体动作（present 工具）`)
+    // 断言用**精确短语**而不是单个词：松正则（如 /present/ 或 /都要/）会在指令被写乱时
+    // 照样通过 —— 那样测试就退化成"碰巧绿"，正是本项目最忌讳的假绿。
+    assert.ok(d.includes('两张卡片都要'), `${name}：必须原样写出"两张卡片都要"`)
+    assert.ok(d.includes('预览卡片不能替代交付卡片'), `${name}：必须原样驳回"已有预览就不用交付"`)
+    assert.ok(d.includes('present'), `${name}：要给出具体动作（present 工具）`)
+    assert.ok(d.includes('放在回复最后'), `${name}：要说明卡片放最后`)
+    // 兜底那半句同样重要：登记失败时不能什么都不给
+    assert.ok(d.includes('绝对路径'), `${name}：要给出登记失败时的兜底（写绝对路径）`)
   }
+
+  // ark_transcribe **不产出文件**（只返回转写文本，没有产物、也没有预览），
+  // 所以它不该带"两张卡片都要"——带了就是**措辞不准**，会让模型去交付一个不存在的东西。
+  const asr = host.tools.get('ark_transcribe').description
+  assert.equal(
+    asr.includes('两张卡片都要'),
+    false,
+    'ark_transcribe 不产出文件，描述里不该出现"两张卡片都要"（否则会诱导模型交付不存在的东西）',
+  )
+  assert.equal(asr.includes('【交付要求'), false, 'ark_transcribe 不该带交付指令')
 })
 
 test('⚠️ 回归：工具返回值末尾也要提醒交付（决策点在这里，不在调用前）', async () => {
