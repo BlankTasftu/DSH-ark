@@ -11,10 +11,14 @@
  *
  * ## 为什么这条测试要驱动**真实工具**而不是只测一个排版函数
  *
- * 排版逻辑分散在 6 个工具里（图片 / 视频 / 3D / 语音 / 音频 / 转写）。
- * 只测一个纯函数无法保证 6 处都用了它 —— 而"漏了一处"的症状正是
- * "那个能力的卡片又跑到中间去了"，且不会报错。
+ * 排版逻辑分散在多个工具里。只测一个纯函数无法保证每一处都用了它 ——
+ * 而"漏了一处"的症状正是"那个能力的卡片又跑到中间去了"，且不会报错。
  * 所以这里用 mock fetch（**零网络**）把工具真正跑一遍，断言它实际吐出的文本。
+ *
+ * ⚠️ 计数用词要准确：`previewLine(` 的**调用点只有 5 个**
+ * （图片 / 视频 / 3D / 语音 / 音频）；第 6 处匹配是它的**函数定义**。
+ * `ark_transcribe` **不产出文件**，本来就不该有预览行。
+ * （这里曾写"6 个工具"，是独立审查抓出来的过期注释。）
  */
 
 import { test } from 'node:test'
@@ -36,7 +40,16 @@ function bootHost(pluginConfig = {}) {
     config: pluginConfig,
     builtins: ['tools'],
     services: {
-      credentials: { resolve: async (ref) => (ref === 'ARK_API_KEY' ? { value: 'test-key' } : undefined) },
+      // ⚠️ 两把凭据都要给：`ark_transcribe` 走**语音**凭据（VOLCENGINE_SPEECH_API_KEY），
+      // 只给 ARK_API_KEY 会让它报 MISSING_CREDENTIAL，测试就拿不到真实返回值
+      // （第一版就是这样，症状是返回值只剩一句错误文案）。
+      credentials: {
+        resolve: async (ref) => {
+          if (ref === 'ARK_API_KEY') return { value: 'test-ark-key' }
+          if (ref === 'VOLCENGINE_SPEECH_API_KEY') return { value: 'test-speech-key' }
+          return undefined
+        },
+      },
     },
   })
   // ⚠️ 必须把 config 传给 apply()：宿主会用它初始化配置，
@@ -64,8 +77,6 @@ async function withFetch(stub, fn) {
     globalThis.fetch = original
   }
 }
-
-const previewLineOf = (out) => out.split('\n').filter(Boolean).at(-1)
 
 test('⚠️ 回归：ark_generate_image 的预览地址排在最后（卡片才会落在最下面）', async () => {
   await withWorkspace(async (cwd) => {
@@ -126,6 +137,74 @@ test('⚠️ 回归：多张图时预览地址仍只有一行（URL 用 、 分�
 })
 
 /**
+ * ⚠️ 回归（独立审查 D7）：`ark_transcribe` 的**返回值**此前没有任何测试。
+ *
+ * 它是唯一"输入音频、输出文本"的工具 —— **不产出文件**。
+ * 所以它的返回值里**不该**出现预览地址或交付提醒：那两样都指向产物，
+ * 而它根本没有产物。这条测试就是这个"不产出"契约的行为断言。
+ *
+ * 之所以要有它：前面那条结构性契约只能查**描述文本**，查不到返回值。
+ * 而"给不产文件的工具加交付提醒"正是 v0.3.1 犯过的错 —— 那次就是看漏了返回值这一层。
+ */
+test('⚠️ 回归：ark_transcribe 返回值里不得出现预览地址或交付提醒（它不产出文件）', async () => {
+  await withWorkspace(async (cwd) => {
+    const audioPath = path.join(cwd, 'sample.mp3')
+    await fs.writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]))
+
+    const host = bootHost()
+    // ASR 极速版：HTTP 200 + JSON，鉴权走 X-Api-Key。
+    // ⚠️ 形状要照**实测同构**的来（含 `audio_info.duration`）——
+    // 少了它 `durationMs` 为 undefined，虽然不影响本用例，但会让桩与真实响应脱节。
+    const stub = createFetchStub([
+      {
+        body: {
+          audio_info: { duration: 3240 },
+          result: {
+            text: '你好呀！喜欢我送给你的礼物吗？',
+            utterances: [
+              { text: '你好呀！', start_time: 330, end_time: 930 },
+              { text: '喜欢我送给你的礼物吗？', start_time: 1410, end_time: 3010 },
+            ],
+          },
+        },
+        headers: { 'content-type': 'application/json', 'X-Tt-Logid': 'log-asr-1' },
+      },
+    ])
+
+    const out = await withFetch(stub, () =>
+      host.tools.get('ark_transcribe').execute({ audioPath: 'sample.mp3', cwd }, createExec({ cwd })),
+    )
+
+    assert.equal(typeof out, 'string')
+    assert.ok(out.includes('你好呀！喜欢我送给你的礼物吗？'), `转写文本必须返回，实际：\n${out}`)
+    // 不产出文件 ⇒ 不该有产物相关的任何提示
+    assert.equal(/预览地址/.test(out), false, `不产出文件却给了预览地址：\n${out}`)
+    assert.equal(/present/.test(out), false, `不产出文件却要求交付：\n${out}`)
+    assert.equal(/\.mp3|\.wav|\.glb|\.png/.test(out), false, `不该给出产物路径：\n${out}`)
+  })
+})
+
+/**
+ * 对照：产出文件的能力**必须**在返回值里给预览地址。
+ *
+ * 与上一条配对，说明"返回值里有预览地址"这件事是**按能力区分**的，
+ * 不是所有工具都该有、也不是都没有。
+ */
+test('对照：ark_generate_image 的返回值必须含预览地址（产出文件的能力）', async () => {
+  await withWorkspace(async (cwd) => {
+    const host = bootHost()
+    const stub = createFetchStub([
+      { body: { data: [{ b64_json: PNG_B64 }] }, headers: { 'content-type': 'application/json' } },
+    ])
+    const out = await withFetch(stub, () =>
+      host.tools.get('ark_generate_image').execute({ prompt: '一只猫' }, createExec({ cwd })),
+    )
+    assert.match(out, /预览地址（仅本机可访问）：\/dsh-ark\/asset\?id=/)
+    assert.match(out, /present/)
+  })
+})
+
+/**
  * ⚠️ 回归（模型理解偏差）：**两张卡片都要**的指令必须写死在给模型的上下文里。
  *
  * 实测：模型经常以"已经有预览卡片了，用户能看到图片，不用再交付"为理由
@@ -181,26 +260,34 @@ test('⚠️ 回归：工具返回值末尾也要提醒交付（决策点在这�
   })
 })
 
-test('⚠️ 回归：预览地址是最后一行 —— 逐个能力都验（防止只改了其中几处）', async () => {
-  // 这条是"6 个工具都遵守同一条不变量"的守卫。
-  // 之所以只驱动图片一个：其余能力的**布局代码位置**不同，但都调用同一个
-  // `previewLine()` 并把它放在数组末位；这里用源码级断言补齐覆盖面。
+test('⚠️ 回归：产出文件的工具，其 previewLine 调用必须都排在数组末位', async () => {
+  // ⚠️ 这条是**源码级**守卫，它只防"漏改某一处 / 把调用挪离末位"，
+  // **防不了**"在它后面又追加一行"（那种改法不改变 `previewLine(...)` 后面是否紧跟 `]`）。
+  // 追加类的变异由 `tests/render-status.test.mjs` 的**行为**断言负责。
   const src = await fs.readFile(new URL('../lib/index.js', import.meta.url), 'utf8')
 
-  // previewLine 必须存在且是唯一的排版入口
   assert.match(src, /function previewLine\(/, 'previewLine 必须存在')
 
-  // 每次 `previewLine(` 调用，都必须在返回数组的**末位**（后面不再跟别的元素）。
-  const calls = [...src.matchAll(/previewLine\(/g)].length
-  assert.ok(calls >= 5, `previewLine 应在所有产出工具里被调用（实际 ${calls} 处）`)
-
-  // 末位判据：`previewLine(...)` 之后到 `]` 之间不应再有非注释、非空的行
   const lines = src.split('\n')
-  let checked = 0
+  const callLines = []
   for (let i = 0; i < lines.length; i++) {
     if (!/previewLine\(/.test(lines[i])) continue
     if (/^\s*(\*|\/\/)/.test(lines[i])) continue // 注释里的提及不算调用
-    if (/function\s+previewLine\s*\(/.test(lines[i])) continue // 函数定义本身不是调用
+    if (/function\s+previewLine\s*\(/.test(lines[i])) continue // 函数定义不是调用
+    callLines.push(i)
+  }
+
+  // ⚠️ 计数要排除**函数定义**那一行（曾用 `matchAll` 直接数，把定义也算进去，
+  // 于是 `>= 5` 的阈值无法区分"5 个调用 + 定义"与"6 个调用" —— 独立审查 D8 指出）。
+  // 正确的调用点数量就是 5 个产出文件的能力。
+  assert.equal(
+    callLines.length,
+    5,
+    `previewLine 的调用点应当正好 5 个（图片/视频/3D/语音/音频），实际 ${callLines.length} 个`,
+  )
+
+  // 每个调用点后面必须紧跟数组结尾
+  for (const i of callLines) {
     let j = i + 1
     let ok = false
     while (j < lines.length && j < i + 6) {
@@ -213,7 +300,5 @@ test('⚠️ 回归：预览地址是最后一行 —— 逐个能力都验（�
       break
     }
     assert.ok(ok, `第 ${i + 1} 行的 previewLine 调用之后必须紧跟数组结尾 —— 否则预览地址不是最后一行`)
-    checked++
   }
-  assert.ok(checked >= 5, `应检查到至少 5 处 previewLine 调用，实际 ${checked}`)
 })

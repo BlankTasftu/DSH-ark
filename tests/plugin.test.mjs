@@ -11,9 +11,46 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import plugin from '../lib/index.js'
 import { createHost, createExec } from './host-harness.mjs'
+
+/**
+ * 从源码里提取"交付指令"常量的**全部字符串片段**。
+ *
+ * ## 为什么要这样提取，而不是在测试里抄一份短语清单
+ *
+ * 独立审查实测过一次教训：第一版反向断言只查「两张卡片都要」「登记为交付物」
+ * 两个 token，于是把**完整指令换一种说法**注入 `ark_transcribe`
+ * （避开这两个 token）**照样全绿** —— 那等于没守。
+ *
+ * 把判据绑在"我记得的措辞"上，必然随着实现改措辞而失效（要么恒真、要么漏抓）。
+ * 所以这里**从源码现场提取**：读 `DELIVERY_NOTE` / `DELIVERY_REMINDER` /
+ * `DELIVERY_REMINDER_NO_PREVIEW` 三个常量的定义体，取出其中所有长度 ≥ 6 的
+ * 字符串字面量。实现改措辞，判据自动跟着变 —— 这才叫"守住了"。
+ */
+function extractDeliveryFragments() {
+  const src = fs.readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  const names = ['DELIVERY_NOTE', 'DELIVERY_REMINDER', 'DELIVERY_REMINDER_NO_PREVIEW']
+  const fragments = new Set()
+  for (const name of names) {
+    // 常量体：从 `const NAME =` 到下一个顶层声明/注释块/EOF
+    const re = new RegExp(`const ${name} =([\\s\\S]*?)(?=\\n\\/\\*\\*|\\nconst |\\nfunction |\\nexport |$)`)
+    const m = re.exec(src)
+    assert.ok(m, `无法从源码里提取 ${name} —— 提取逻辑需要跟着结构调整`)
+    // 取该定义体里的所有单引号字符串字面量
+    for (const lit of m[1].matchAll(/'((?:[^'\\]|\\.)*)'/g)) {
+      const s = lit[1]
+      if (s.length >= 6) fragments.add(s)
+    }
+  }
+  assert.ok(fragments.size >= 5, `提取到的片段太少（${fragments.size} 个），判据可能失效`)
+  return [...fragments]
+}
+
+const DELIVERY_FRAGMENTS = extractDeliveryFragments()
 
 /** 起一个宿主：默认提供 tools 内建能力（与 DSH Web profile 一致）。 */
 function bootHost(pluginConfig = {}, services = {}, builtins = ['tools']) {
@@ -157,42 +194,67 @@ test('⚠️ 回归：产出文件的工具，描述里必须含交付指令', (
   for (const name of producing) {
     const tool = host.tools.get(name)
     assert.ok(tool, `${name} 应当已注册`)
-    assert.match(
-      tool.description,
-      /交付/,
-      `${name} 的描述必须写明"产出后要把文件交付给用户" —— 否则调用方只贴路径，用户拿不到文件`,
+    // ⚠️ 用**精确短语**而不是松正则（如 /交付/）。松正则在描述里加一句无关的
+    // "交付所见即所得。"就会通过 —— 独立审查实测过（N12）。
+    assert.ok(
+      tool.description.includes('两张卡片都要'),
+      `${name} 的描述必须原样写出"两张卡片都要" —— 否则调用方可能只贴路径，用户拿不到文件`,
     )
-    // "只给路径不够"这半句是关键：否则调用方会以为给了路径就够了。
-    assert.match(tool.description, /不算交付|绝对路径/, `${name} 的描述要说清"只给路径不够"`)
+    assert.ok(
+      tool.description.includes('预览卡片不能替代交付卡片'),
+      `${name} 的描述必须原样驳回"已有预览就不用交付"`,
+    )
+    assert.ok(tool.description.includes('绝对路径'), `${name} 的描述要说清"登记失败时的兜底"`)
   }
 
-  // 反向：不产出文件的工具不该被塞这句（避免文案膨胀、也避免误导）。
+  // 反向：不产出文件的工具**必须明确声明自己不产出文件**，且不得带交付指令。
   //
-  // ⚠️ 断言方式很关键（这是独立审查抓到的**假绿**）：
-  // 原来写的是 `d.includes('【交付要求')` —— 那只是在测一个**字面前缀**，
-  // 只能抓住恰好以 `【交付要求】` 开头的那种文案。把真实的 v0.3.1 指令
-  // （它以 `【交付要求】` 开头）注入 `ark_credential_status` 时，
-  // 原断言**照样通过**（30/30 全绿），也就是它根本没在守这件事。
+  // ## 这里的判据为什么是"两条一起"，以及它**抓不到什么**
   //
-  // 正确做法：直接拿**指令常量的可识别片段**来判 —— 只要那句指令出现在
-  // 不该出现的地方，无论前缀怎么写都能抓到。
-  for (const name of ['ark_credential_status', 'ark_transcribe']) {
+  // 走过两次弯路，都记在这里：
+  //   ① 最初写 `!/【交付要求】/.test(...)` —— 只测一个**字面前缀**，注入真实指令
+  //      文本照样通过；
+  //   ② 改成列举 `两张卡片都要` / `登记为交付物` 两个 token —— 把指令**换个说法**
+  //      注入（避开这两个 token）照样通过。独立审查两次都实测复现了。
+  //
+  // 教训：**子串匹配永远追不上改写**。所以判据改成**结构性契约**，对措辞免疫：
+  //   · 不产出文件的工具，描述里**必须有一句明确声明**（"不产出文件"）——
+  //     这样"没给它加交付指令"是**被断言过的**，而不是靠没人去加；
+  //   · 同时不得含**常量原文**（挡住"直接把 DELIVERY_NOTE 拼上去"这种最常见的错）。
+  //
+  // ## ⚠️ 已知极限（不要假装它不存在）
+  //
+  // 如果把指令**完全改写成**不含任何常量原文片段、但语义仍在要求交付的话
+  // （例如"产出文件后必须调用 present 登记交付物…"），**这两条断言抓不到**。
+  // 我实测确认过这个反例仍然全绿。
+  //
+  // 之所以不再继续堆关键词：那样只会让断言越来越长、越来越脆，而**每一次
+  // "多想一种写法"都是在制造新的假绿**（前两次就是这么来的）。
+  // 真正的根治要靠**行为断言**（真的调用该工具、检查它有没有产出文件），
+  // 那需要一个能驱动全部 7 个工具的 mock 环境 —— 不在本次范围内，记在此处待办。
+  const NON_PRODUCING = ['ark_credential_status', 'ark_transcribe']
+  for (const name of NON_PRODUCING) {
     const d = host.tools.get(name).description
-    assert.equal(
-      d.includes('两张卡片都要'),
-      false,
-      `${name} 不产出文件，不该带交付指令（会诱导模型去交付不存在的东西）`,
+    assert.ok(
+      d.includes('不产出文件'),
+      `${name} 的描述必须明确声明"不产出文件" —— 否则模型会去交付一个不存在的东西`,
     )
+    for (const frag of DELIVERY_FRAGMENTS) {
+      assert.equal(
+        d.includes(frag),
+        false,
+        `${name} 不产出文件，描述里不该出现交付指令的原文片段「${frag}」`,
+      )
+    }
+  }
+
+  // 产出文件的工具则**不得**说自己"不产出文件"（分类自相矛盾）
+  for (const name of producing) {
     assert.equal(
-      d.includes('登记为交付物'),
+      host.tools.get(name).description.includes('不产出文件'),
       false,
-      `${name} 不产出文件，描述里不该出现"登记为交付物"`,
+      `${name} 会落盘产物，描述里不该出现"不产出文件"`,
     )
-    // ⚠️ 不要再写 `includes('只贴一行路径')` 这类**当前指令里已经没有**的措辞：
-    // 那种断言恒为真、永远不可能失败，是另一种假绿。
-    // 判据必须落在**指令里确实存在**的短语上（上面两条），
-    // 或者干脆直接比对常量本身（见 tests/preview-last-line.test.mjs 里对
-    // "产出文件的工具必须含这两句" 的正向断言）。
   }
 })
 
