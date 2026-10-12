@@ -1,6 +1,6 @@
 {
   "name": "dsh-ark",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "火山方舟（Volcengine Ark）能力插件：Seedream 图像资产生成、Seedance 视频生成、Seed3D 图生 3D，以及豆包语音（合成 / 识别 / SeedAudio 音频生成），由模型直接调用。",
   "keywords": [

@@ -131,6 +131,47 @@ test('工具描述里写明了计费与异步语义（模型据此决策，不�
   assert.match(speak.description, /独立|不是同一个/)
 })
 
+/**
+ * ⚠️ 回归：**产出文件**的工具必须在描述里写明"把文件交付给用户"。
+ *
+ * 真实反馈：生成完图片后，会话窗口里只看到图片，用户拿不到文件。
+ * 根因不是产物没落盘（路径已回传），而是"把文件登记为交付物"这一步
+ * **没有任何地方提醒调用方做** —— 只贴路径或预览地址，用户就打不开。
+ *
+ * 工具描述是模型**每次调用都会看到**的文本，所以指令写在这里最可靠。
+ * 这条测试守着它不被后续重构悄悄弄丢（丢了不会报错，只会让产物又拿不到）。
+ */
+test('⚠️ 回归：产出文件的工具，描述里必须含交付指令', () => {
+  const host = bootHost()
+  const producing = [
+    'ark_generate_image',
+    'ark_generate_video',
+    'ark_generate_3d',
+    'ark_speak',
+    'ark_generate_audio',
+    'ark_transcribe',
+  ]
+  for (const name of producing) {
+    const tool = host.tools.get(name)
+    assert.ok(tool, `${name} 应当已注册`)
+    assert.match(
+      tool.description,
+      /交付/,
+      `${name} 的描述必须写明"产出后要把文件交付给用户" —— 否则调用方只贴路径，用户拿不到文件`,
+    )
+    // "只贴路径不算交付"这半句是关键：否则调用方会以为给了路径就够了。
+    assert.match(tool.description, /不算交付|绝对路径/, `${name} 的描述要说清"只给路径不够"`)
+  }
+
+  // 反向：不产出文件的工具不该被塞这句（避免文案膨胀、也避免误导）。
+  const status = host.tools.get('ark_credential_status')
+  assert.equal(
+    /【交付要求】/.test(status.description),
+    false,
+    'ark_credential_status 不产出文件，不该带交付指令',
+  )
+})
+
 test('写操作工具标记为不可并发，读操作标记为可并发，生成/识别类标记为不可并发', () => {
   const host = bootHost()
   // 会产生上游计费写入或占用配额的：不可并发
